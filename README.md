@@ -36,6 +36,24 @@ measured; there is no credible "after" number yet, and I am not going to invent 
 The intended workflow is: run with `debug.enabled: true`, read `/linggango-net stats`, and
 then enable only the optimisations the data supports. See `docs/CONFIGURATION.md`.
 
+### Live measured capture
+
+A real client↔server session on the MC 1.20.1 / Forge 47.4.20 dev environment captured
+**164,790 packets / 8.0 MB over 4m 37s (1.7 MB/min)**, fully attributed:
+
+```
+By mod (top 20)
+  Vanilla    164,765 packets    7.8 MB
+  fml             22 packets  128.2 KB
+  forge            1 packets      121 B
+  minecraft        2 packets      114 B
+```
+
+That run was a single client loading terrain, so it proves the instrumentation is correct
+rather than representing a real server load. It also confirms the mixin sees every outbound
+packet at true wire size, and that Forge's handshake channel is separated from vanilla
+traffic. See `docs/HEADLESS_TESTING.md` for how to reproduce it without a GPU.
+
 ## Quick start
 
 **Download:** [`linggangosync-1.0.0+mc1.20.1.jar`](https://github.com/amrmostafa800/minecraft_linggango_sync/releases/latest)
