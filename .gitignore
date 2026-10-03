@@ -1,8 +1,12 @@
 # Gradle
 .gradle/
 build/
-!dist/
 out/
+
+# Release artifacts are published as GitHub Release assets, not committed.
+# A jar is a 100 KB binary that changes on every build; keeping it out of git
+# keeps the history diffable and avoids a stale copy in the tree.
+dist/
 
 # ForgeGradle run directories (generated on first launch)
 run/
