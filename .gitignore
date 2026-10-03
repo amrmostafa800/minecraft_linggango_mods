@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+!dist/
+out/
+
+# ForgeGradle run directories (generated on first launch)
+run/
+runs/
+logs/
+*.log
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.classpath
+.project
+.settings/
+bin/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local cache written by Linggango Sync at runtime
+config/linggangosync.json
+config/linggangosync-cache.bin
+
+# mcmodsrepo is only produced by `gradle publishToMavenLocal`-style tasks
+mcmodsrepo/
