@@ -36,14 +36,39 @@ measured; there is no credible "after" number yet, and I am not going to invent 
 The intended workflow is: run with `debug.enabled: true`, read `/linggango-net stats`, and
 then enable only the optimisations the data supports. See `docs/CONFIGURATION.md`.
 
+### Live measured capture
+
+A real client↔server session on the MC 1.20.1 / Forge 47.4.20 dev environment captured
+**164,790 packets / 8.0 MB over 4m 37s (1.7 MB/min)**, fully attributed:
+
+```
+By mod (top 20)
+  Vanilla    164,765 packets    7.8 MB
+  fml             22 packets  128.2 KB
+  forge            1 packets      121 B
+  minecraft        2 packets      114 B
+```
+
+That run was a single client loading terrain, so it proves the instrumentation is correct
+rather than representing a real server load. It also confirms the mixin sees every outbound
+packet at true wire size, and that Forge's handshake channel is separated from vanilla
+traffic. See `docs/HEADLESS_TESTING.md` for how to reproduce it without a GPU.
+
 ## Quick start
 
-1. Build (below) or use the prebuilt jar.
-2. Drop the jar into `mods/` on **both** the server and every client.
-3. Start the server once. It writes `config/linggangosync.json` with safe defaults.
-4. Set `debug.enabled: true` and play a normal session.
-5. Run `/linggango-net stats` (operator only) to see where the bytes go.
-6. Change **one** policy, play again, and compare.
+**Download:** [`linggangosync-1.0.0+mc1.20.1.jar`](https://github.com/amrmostafa800/minecraft_linggango_sync/releases/latest)
+— the compiled jar is attached to the GitHub Release, not committed to this repo.
+Verify the checksum in `linggangosync-1.0.0+mc1.20.1.jar.sha256` before installing.
+
+> Note: this repository is private, so release assets need authentication to download.
+> Use the release page in a browser while logged in, or the asset API endpoint — see
+> [`docs/RELEASE.md`](docs/RELEASE.md).
+
+1. Drop the jar into `mods/` on **both** the server and every client.
+2. Start the server once. It writes `config/linggangosync.json` with safe defaults.
+3. Set `debug.enabled: true` and play a normal session.
+4. Run `/linggango-net stats` (operator only) to see where the bytes go.
+5. Change **one** policy, play again, and compare.
 
 ## Build instructions
 
