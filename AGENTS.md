@@ -67,3 +67,19 @@ present. When chasing attribution, measure with only one optimisation layer acti
 - Release process and the pre-publish checklist live in `docs/RELEASE.md`.
 - Release assets on this **private** repo return `Not Found` to anonymous downloads; use the
   asset API endpoint or a logged-in browser.
+
+## Live test environment (this box)
+
+- No GPU: software GL only (Xvfb + Mesa `llvmpipe`). Java 17 at
+  `/workspace/toolchain/jdk-17.0.20.1+1`.
+- A runtime restart reverts everything outside `/workspace` (apt packages, `/tmp`, `/opt`);
+  the JDK and the `prodclient`/`prodserver` installs survive under `/workspace`.
+- The machine has 4 CPUs, ~16 GB RAM, **no swap** (and `swapon` is not permitted), so a
+  400-mod server plus a software-GL client are permanently near the OOM ceiling. A runtime
+  memory error restarts the process tree; check `uptime` before assuming a crash cause.
+- Full boot recipe and the production-client join capture are in `docs/HEADLESS_TESTING.md`.
+  Key points: exclude `lazyyyyy` from the client (off-thread `DynamicTexture` crash), set
+  `max-tick-time=-1`, and pin server/client to disjoint cores (`taskset -c 0,1` / `taskset -c 2,3`).
+- Server console stdin is not consumed in this setup; drive commands through RCON
+  (`enable-rcon=true`, port 25575) with `/workspace/rcon.py`.
+
