@@ -93,6 +93,57 @@ Two things this validates:
 A single client loading terrain is not a useful bandwidth benchmark; it exists to prove the
 instrumentation is correct. Real optimisation decisions need a populated server.
 
+## Production-client run against the full Linggango pack
+
+ForgeGradle `runClient` (userdev) cannot boot this pack: several mods ship raw SRG names
+(`alltheleaks` -> `GsonHelper.m_13855_`, `neobackports` -> `@Shadow m_5483_`) or Fabric-only
+metadata (`jasione`), which the userdev remapper rejects even though production accepts them.
+Test with a **production** install instead: run the official Forge installer, then launch the
+generated `libraries/` + `versions/` classpath directly with the vanilla `--gameDir`/`--assetsDir`
+arguments. A full 1.20.1 asset store (3598 objects, keyed by the `hash` field of the asset
+index — not the resource path) is required.
+
+Result with all 429 client mods and our mod present:
+
+```
+[Render thread/INFO] [minecraft/Minecraft]: Setting user: TestPlayer
+[Worker-ResourceReload/INFO] [LinggangoSync/]: Linggango Sync ready: 60 descriptors
+[Worker-ResourceReload/INFO] [LinggangoSync/]: Client cache ready at .../linggangosync/cache.bin
+[ConnectScreen]: Connecting to localhost, 25565
+[NetworkHooks]: Connected to a modded server.
+[PlayerList]: TestPlayer[/127.0.0.1:52336] logged in with entity id 1297
+[MinecraftServer]: TestPlayer joined the game
+```
+
+Live join-synchronisation capture on the server (`/linggango-net types`), which is exactly the
+class of data this mod exists to measure:
+
+```
+S->C Vanilla / ClientboundUpdateRecipesPacket                1    5.5 MB
+S->C Vanilla / ClientboundLevelChunkWithLightPacket        109    5.4 MB
+S->C architectury / CustomPayload                          163    4.2 MB  (max 3.6 MB single packet)
+S->C fml / CustomPayload                                   296    2.3 MB
+S->C Vanilla / ClientboundLoginPacket                        1  704.2 KB
+S->C Hexerei / CustomPayload                                 3  596.9 KB
+S->C Vanilla / ClientboundUpdateTagsPacket                   1  549.2 KB
+S->C tiered / CustomPayload                                  3  369.4 KB
+```
+
+The single 5.5 MB `ClientboundUpdateRecipesPacket` and the 3.6 MB `architectury` payload are the
+on-demand / cacheable candidates; recipes are identical for every player and never change while
+the server is up.
+
+## Two environment gotchas that masquerade as mod bugs
+
+- **`lazyyyyy` + software GL**: its lazy entity-renderer coroutine constructs a `DynamicTexture`
+  off the render thread, which crashes `Joy of Painting` during the menu load
+  (`Rendersystem called from wrong thread`). Unrelated to this mod; exclude `lazyyyyy` from the
+  client (it adds no blocks/items, so there is no registry mismatch) to reach the menu.
+- **Server watchdog under CPU contention**: with a software-GL client and a 400-mod server on
+  4 cores, the client starves the server tick thread and the vanilla watchdog kills the server
+  (`ServerHangWatchdog ... tick took 60.00 seconds`). Set `max-tick-time=-1` and pin the server
+  and client to disjoint cores (`taskset -c 0,1` / `taskset -c 2,3`) so the login burst completes.
+
 ## Gotcha: `run/` is gitignored
 
 Dev runs create `run/client1/`, `run/server/`, world saves and stray `logs/`. All are
