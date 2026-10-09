@@ -83,3 +83,23 @@ present. When chasing attribution, measure with only one optimisation layer acti
 - Server console stdin is not consumed in this setup; drive commands through RCON
   (`enable-rcon=true`, port 25575) with `/workspace/rcon.py`.
 
+## linggangoopt (datapack login cache)
+
+A second mod, `linggangoopt/` (com.linggango.opt), removes the recipe/tag datapack resend on
+reconnect. See `docs/LINGGANGOOPT.md` for the full report. Gotchas worth not rediscovering:
+
+- Client hashes the **exact wire bytes**, captured at the head of `PacketDecoder.decode` with
+  `ByteBuf.getBytes` (no reader advance). Re-serialising a parsed packet to hash it is **not**
+  byte-stable — do not go back to handler-based capture.
+- `ClientboundUpdateRecipesPacket`/`Tags` hashes are **run-dependent** (live map iteration order),
+  so they change across server restarts. The server only compares against the hash it computes
+  now; stale claims just miss. Do not try to make them persistent.
+- ModernFix `mixin.perf.smart_ingredient_sync` rewrites the recipes packet from per-player state,
+  so the recipes skip only fires when it is `false` in `config/modernfix-mixins.properties` on
+  both sides. Tags are unaffected.
+- The skip path is fail-closed: a failed client replay sends `ResendRequest`, the server resends
+  and clears the claim. Never let a replay failure strand the client or disable hooks for the
+  session.
+- Enable the saving server-side with `skip_server_send_on_hash_hit=true` (default false).
+
+
