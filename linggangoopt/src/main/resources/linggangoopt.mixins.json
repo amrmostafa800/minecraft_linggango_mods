@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.linggango.opt.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "linggangoopt.refmap.json",
+  "mixins": [
+    "CompressionEncoderMixin",
+    "ServerGamePacketListenerImplMixin"
+  ],
+  "client": [
+    "PacketDecoderMixin"
+  ],
+  "server": [],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
