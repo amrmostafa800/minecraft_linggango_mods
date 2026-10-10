@@ -21,6 +21,7 @@ public class LinggangoRtp {
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, RtpConfig.SPEC,
                 "linggango-rtp-common.toml");
         MinecraftForge.EVENT_BUS.register(new Events());
+        MinecraftForge.EVENT_BUS.register(new RtpCommandHook());
         LOGGER.info("[rtp] loaded");
     }
 
