@@ -25,20 +25,25 @@ import net.minecraft.world.level.chunk.ChunkStatus;
  * Runs the asynchronous {@code /rtp} search.
  *
  * <p>Each attempt picks a uniformly-by-area candidate, then loads its chunk with
- * {@link ServerChunkCache#getChunkFuture}. The chunk load is the only work that
- * leaves the tick; the returned future completes on the server thread during
- * chunk ticking, so every read of world state (biome, heightmap, FTB Chunks
- * claim) and the teleport itself run in the future's callback, never off-thread.
- * Nothing calls {@code join}/{@code get} on the future.
+ * {@link ServerChunkCache#getChunkFuture}. This is the same pattern the sibling
+ * mod {@code linggango-memfix}'s {@code ChunkPregen} uses: on the server thread
+ * {@code getChunkFuture} pumps the server loop via {@code managedBlock} until
+ * the chunk is loaded, so the tick stalls for the duration of the load (it is
+ * not non-blocking). The returned future then completes on the server thread,
+ * so every read of world state (biome, heightmap, FTB Chunks claim) and the
+ * teleport itself run in the future's callback on the server thread. This code
+ * never calls {@code join}/{@code get} on the future itself.
  *
  * <p>A search is single-flight per player: {@link #start} refuses while one is
  * already pending. The pending entry is removed on every exit path (success,
- * exhaustion, {@link #cancel}, and lifecycle cancellation), so the registry
- * cannot leak.
+ * exhaustion, an exceptional chunk load, {@link #cancel}, and lifecycle
+ * cancellation), so the registry cannot leak.
  */
 public final class RtpSearch {
 
     private static final Map<UUID, Search> PENDING = new ConcurrentHashMap<>();
+    /** Sentinel value marking a claimed-but-not-yet-built search. */
+    private static final Search CLAIM = new Search(null, null, null);
 
     private RtpSearch() {
     }
@@ -46,7 +51,7 @@ public final class RtpSearch {
     /** Begins a search for {@code player}, unless one is already pending. */
     public static void start(ServerPlayer player) {
         UUID playerId = player.getUUID();
-        if (PENDING.containsKey(playerId)) {
+        if (!tryBegin(playerId)) {
             message(player, "already searching");
             return;
         }
@@ -55,17 +60,30 @@ public final class RtpSearch {
         try {
             level = player.serverLevel();
         } catch (Throwable t) {
+            finish(playerId);
             return;
         }
         if (!level.dimension().equals(Level.OVERWORLD)) {
             // /rtp is overworld-only; the command hook already enforces this, so
             // this is a defensive guard rather than a user-facing path.
+            finish(playerId);
             return;
         }
 
         Search search = new Search(playerId, player, level);
         PENDING.put(playerId, search);
         attempt(search, 1);
+    }
+
+    /**
+     * Atomically claims the single-flight slot for {@code playerId}. Returns
+     * {@code false} (without registering anything) when a search is already
+     * pending, else registers a placeholder claim and returns {@code true}.
+     * {@link #start} replaces the placeholder with the real search; every exit
+     * path clears the entry via {@link #finish}.
+     */
+    static boolean tryBegin(UUID playerId) {
+        return PENDING.putIfAbsent(playerId, CLAIM) == null;
     }
 
     /** Drops the pending search for {@code playerId}, if any. */
@@ -85,7 +103,7 @@ public final class RtpSearch {
 
     /** Test seam: registers a pending search without touching the server. */
     static void markPending(UUID playerId) {
-        PENDING.put(playerId, new Search(playerId, null, null));
+        tryBegin(playerId);
     }
 
     /** Test seam: whether a search is pending for {@code playerId}. */
@@ -128,7 +146,15 @@ public final class RtpSearch {
 
         CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future =
                 search.level.getChunkSource().getChunkFuture(x >> 4, z >> 4, ChunkStatus.FULL, true);
-        future.thenAccept(either -> onChunkReady(search, attemptNumber, x, z, either));
+        future.whenComplete((either, err) -> {
+            if (err != null) {
+                // An exceptional completion would otherwise leave the pending
+                // entry behind forever, since the callback never runs.
+                finish(search.playerId);
+                return;
+            }
+            onChunkReady(search, attemptNumber, x, z, either);
+        });
     }
 
     /**

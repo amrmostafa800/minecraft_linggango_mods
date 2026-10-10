@@ -30,10 +30,11 @@ class RtpSearchTest {
 
         assertFalse(RtpSearch.isPending(player), "no search should be pending initially");
 
-        RtpSearch.markPending(player);
-
-        assertTrue(RtpSearch.isPending(player),
-                "a pending search must be visible, so a second start is refused");
+        assertTrue(RtpSearch.tryBegin(player), "the first claim must succeed");
+        assertFalse(RtpSearch.tryBegin(player),
+                "a second claim for the same player must be refused");
+        assertEquals(1, RtpSearch.pendingCount(),
+                "a refused claim must not add a second entry");
     }
 
     @Test
