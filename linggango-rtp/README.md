@@ -5,8 +5,10 @@ Java 17). It replaces FTB Essentials' synchronous `/rtp` location search with an
 asynchronous one, so a random teleport can reach terrain that has never been generated without
 stalling the server thread.
 
-> **Status:** Task 1 scaffold only. This jar currently logs `[rtp] loaded` at startup and does
-> nothing else. The asynchronous search lands in later tasks.
+> **Status:** not yet executed against a live client; deploy pending go/no-go. The mod is fully
+> implemented, builds cleanly and passes its unit suite (18 tests), but no Minecraft client
+> exists in the build environment, so the `/rtp` path has never run against the game. See
+> [`docs/DEPLOY.md`](docs/DEPLOY.md) before installing it anywhere.
 
 ## Intent
 
@@ -31,7 +33,10 @@ warmups, teleport history and dimension rules are unchanged.
 ## How it works (design)
 
 - Intercepts `/rtp` at Forge's `CommandEvent`, cancels FTB's synchronous implementation, and runs
-  its own search.
+  its own search. Interception happens **only in the overworld**, only while FTB reports no active
+  cooldown, only while FTB Essentials is present and only while the mod is `enabled`. In every
+  other case the event is left alone and FTB's own path (including its cooldown message, warm-up,
+  End blacklist and history) runs untouched.
 - Picks a uniformly-by-area random point within a configured radius (default 32,000 blocks) of a
   configurable center (default world origin), clamped to the world border.
 - Loads the candidate chunk through `ServerChunkCache.getChunkFuture` — never blocking the server
@@ -39,11 +44,62 @@ warmups, teleport history and dimension rules are unchanged.
 - Validates the landing on the server thread (solid, safe, open ground; not an excluded biome such
   as ocean or river), retrying up to N times.
 - Hands the found position to FTB's own `rtpTeleporter.teleport(...)` so FTB still applies the
-  cooldown, dimension blacklist, warm-up and teleport history.
-- Fails gracefully: if no valid spot is found, tells the player and does not teleport.
+  cooldown, dimension blacklist, warm-up and teleport history. A rapid second `/rtp` therefore
+  still gets FTB's cooldown message, and `/back` still works because FTB recorded the teleport.
+- Runs at most one search per player at a time (single-flight); a second `/rtp` while one is
+  pending is refused with `already searching`.
+- Cancels any in-flight search when the player logs out, changes dimension, dies, or the server
+  stops, so a callback can never teleport a player who is gone.
+- Fails gracefully: if no valid spot is found after `findAttempts`, tells the player
+  `Could not find a valid location` and does not teleport.
 
 All FTB access is reflective, so the mod compiles against Forge alone (no mod dependencies in
 `build.gradle`) and does nothing if FTB Essentials is absent.
+
+## Configuration
+
+The config is written to `config/linggango-rtp-common.toml` (note the hyphenated name — it is
+fixed in code and does not follow the mod id). All keys live under the `[rtp]` table:
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | Master switch. When `false` the mod does not intercept `/rtp`. |
+| `centerX` | int | `0` | Centre X of the search area. Range `-30000000..30000000`. |
+| `centerZ` | int | `0` | Centre Z of the search area. Range `-30000000..30000000`. |
+| `minRadius` | int | `0` | Minimum distance from the centre, in blocks. Range `0..30000000`. |
+| `maxRadius` | int | `32000` | Maximum distance from the centre, in blocks. Range `0..30000000`. |
+| `findAttempts` | int | `10` | Candidates to try before giving up. Range `1..1000`. |
+| `respectClaims` | boolean | `true` | Skip candidates inside an FTB Chunks claim the player is not a member/ally of. |
+| `excludedBiomes` | list of `namespace:path` | see below | Biomes `/rtp` will not land in. |
+
+Every getter falls back to the default above if the config is not yet loaded, so a read before
+Forge finishes config loading is safe.
+
+Default `excludedBiomes` (EssentialsX's ocean/river set plus the Linggango additions):
+
+```
+minecraft:ocean
+minecraft:deep_ocean
+minecraft:cold_ocean
+minecraft:deep_cold_ocean
+minecraft:frozen_ocean
+minecraft:deep_frozen_ocean
+minecraft:lukewarm_ocean
+minecraft:deep_lukewarm_ocean
+minecraft:warm_ocean
+minecraft:deep_warm_ocean
+minecraft:river
+minecraft:frozen_river
+minecraft:deep_dark
+minecraft:mushroom_fields
+minecraft:the_void
+minecraft:small_end_islands
+minecraft:end_highlands
+minecraft:end_midlands
+minecraft:end_barrens
+```
+
+Biome matching is case-insensitive.
 
 ## Install
 
@@ -53,21 +109,38 @@ All FTB access is reflective, so the mod compiles against Forge alone (no mod de
 FTB Essentials is a soft dependency: it is not required to load the mod, but the mod's behaviour
 only applies where FTB Essentials is present.
 
+**Deploying to the live server** (and retiring the `linggango-memfix` `/rtp` guard) is a
+production side-effect and needs a human go/no-go: see [`docs/DEPLOY.md`](docs/DEPLOY.md) for the
+exact SFTP, backup, edit, restart, smoke-test and rollback steps.
+
 ## Building from source
 
 ```bash
 export JAVA_HOME=/workspace/tools/jdk-17.0.13+11
 export PATH=$JAVA_HOME/bin:$PATH
-./gradlew clean build --no-daemon --console=plain
+sh gradlew clean build --no-daemon --console=plain
 # artifact: build/libs/linggango_rtp-1.0.0.jar
 ```
 
-The first build downloads and decompiles Minecraft through ForgeGradle and takes a few minutes.
+`gradlew` is committed non-executable (matching the sibling mods), so invoke it as `sh gradlew`
+or `chmod +x gradlew` first. The first build downloads and decompiles Minecraft through
+ForgeGradle and takes a few minutes; the unit suite (18 tests) runs as part of `build`.
+
+## Release verification
+
+- Build: `BUILD SUCCESSFUL`, **18 tests passed, 0 failed, 0 skipped**.
+- Artifact: `build/libs/linggango_rtp-1.0.0.jar`, 21,475 bytes, SHA-256
+  `9f243ce1ae1298f2633233eedd21fd5a6914d1f0bacc4fe79c94401bd566e317`.
+- The jar contains `META-INF/mods.toml`, `pack.mcmeta` and the seven mod classes; it bundles no
+  FTB classes (FTB access is reflection-only).
+- `mods.toml` declares modid `linggango_rtp` and a soft (`mandatory=false`) `ftbessentials`
+  dependency.
 
 ## References
 
 - Design: `docs/superpowers/specs/2026-10-10-linggango-rtp-design.md`
 - Plan: `docs/superpowers/plans/2026-10-10-linggango-rtp.md`
+- Deploy runbook: `docs/DEPLOY.md`
 
 ---
 
