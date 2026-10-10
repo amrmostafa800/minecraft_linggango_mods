@@ -74,9 +74,13 @@ public final class LandingValidator {
     /**
      * True when {@code biomeId} is in {@link RtpConfig#excludedBiomes()}. The
      * lookup is case-insensitive: the configured set is lowercased and so is the
-     * query.
+     * query. A null {@code biomeId} is not excluded (this method is pure and
+     * must never throw).
      */
     public static boolean biomeExcluded(ResourceLocation biomeId) {
+        if (biomeId == null) {
+            return false;
+        }
         return RtpConfig.excludedBiomes().contains(biomeId.toString().toLowerCase(java.util.Locale.ROOT));
     }
 

@@ -38,6 +38,13 @@ class LandingValidatorTest {
                 "plains is a valid landing biome");
     }
 
+    @Test
+    void nullBiomeIsNotExcluded() {
+        // A pure method must not NPE; a missing biome is treated as not excluded.
+        assertFalse(LandingValidator.biomeExcluded(null),
+                "a null biome id is not excluded");
+    }
+
     private static ResourceLocation rl(String id) {
         ResourceLocation location = ResourceLocation.tryParse(id);
         if (location == null) {
