@@ -45,10 +45,6 @@ public class MemFix {
         MemFixConfig.bake();
         MemFixConfig.initTargets();
         LOGGER.info("[memfix] loaded {} leak targets", MemFixConfig.targetCount());
-        if (RtpGuard.install()) {
-            LOGGER.info("[memfix] /rtp guard installed (rtp.guard={}, pregenerate={})",
-                    MemFixConfig.rtpGuardEnabled(), MemFixConfig.pregenEnabled());
-        }
     }
 
     private static final class Events {
@@ -57,12 +53,10 @@ public class MemFix {
         public void onServerStarted(ServerStartedEvent event) {
             int n = Sweeper.sweep(event.getServer());
             LOGGER.info("[memfix] startup sweep dropped {} entries", n);
-            ChunkPregen.start(event.getServer());
         }
 
         @SubscribeEvent
         public void onServerStopped(ServerStoppedEvent event) {
-            ChunkPregen.stop();
             int n = Sweeper.sweep(null);
             LOGGER.info("[memfix] server stop sweep dropped {} entries (total {} since start)",
                     n, Sweeper.getTotalPurged());
@@ -78,7 +72,6 @@ public class MemFix {
             if (event.phase != TickEvent.Phase.END) {
                 return;
             }
-            ChunkPregen.tick(event.getServer());
             if (!Sweeper.dueForSweep(MemFixConfig.sweepIntervalMillis())) {
                 return;
             }

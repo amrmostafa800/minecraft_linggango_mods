@@ -62,7 +62,7 @@ is never touched.
 
 ## Install
 
-1. Drop `memfix-1.0.0.jar` into the server's `mods/` folder.
+1. Drop `memfix-1.1.0.jar` into the server's `mods/` folder.
 2. Restart. No configuration needed, no dependencies beyond Forge.
 
 Client mods are not required, and the mod is harmless if a client happens to have it installed.
@@ -100,16 +100,19 @@ Everything below was run against the real `serverpack-slim-6.6.5b3hf`.
 loading one of these classes runs its static initializer, which registers blocks and items and
 needs the full Minecraft bootstrap — outside a server that throws and looks like a missing field.
 
-**The build runs.** `./gradlew clean build` passes, including 14 unit tests: 8 for the sweep rules
+**The build runs.** `./gradlew clean build` passes, including 8 unit tests for the sweep rules
 (offline-player detection, never-joined retention, nested containers, Guava multimap handling,
-item-stack eviction, null and unrecognised keys) and 6 for `RegionIndex`.
+item-stack eviction, null and unrecognised keys).
+
+**Components removed in 1.1.0.** When the `/rtp` guard and pregenerator existed,
+`tools/verify-targets.py` also exercised the `ServerChunkCache`/`TicketType` paths they used. Those
+components were removed in 1.1.0 (see *History*), so the script now verifies only the sweep targets.
 
 **Reobfuscation is correct.** The source is written against Mojang mappings and ForgeGradle
 reobfuscates to SRG for distribution. `javap -c` on the shipped jar shows the Minecraft calls were
 mapped to their SRG names — `m_6846_` (`getPlayerList`), `m_11314_` (`getPlayers`), `m_129785_`
-(`getAllLevels`), `m_213877_` (`isRemoved`), `m_41619_` (`isEmpty`), `m_20148_` (`getUUID`) and the
-`ServerChunkCache`/`TicketType` calls used by the `/rtp` guard and pregenerator — so the reflective
-paths hit the same members a plugin developer would target.
+(`getAllLevels`), `m_213877_` (`isRemoved`), `m_41619_` (`isEmpty`) and `m_20148_` (`getUUID`) —
+so the reflective paths hit the same members a plugin developer would target.
 
 **It loads in the pack.** Booting the real server with the built jar:
 
@@ -152,7 +155,8 @@ into a host that cannot afford it.
 
 FTB Essentials (`world/serverconfig/ftbessentials.snbt`) — teleport cooldowns are 0 and the
 teleport-history and home limits are at their maxima, so `/home`, `/back`, `/tpa` and `/spawn` run
-immediately without warm-ups or limits.
+immediately without warm-ups or limits. `/rtp` is served by the separate `linggango-rtp` mod (see
+*History*); its `min_distance`/`max_distance` are `500`/`2048`.
 
 FTB Chunks (`world/serverconfig/ftbchunks-world.snbt`) — `max_claimed_chunks` and
 `max_force_loaded_chunks` are `2147483647` and `force_load_mode` is `"always"`.
@@ -179,15 +183,11 @@ ModernFix would trade a harmless log line for a much heavier server.
 ```
 src/main/java/com/linggango/memfix/
   MemFix.java        mod entry point and lifecycle event handlers
-  MemFixConfig.java  the 36 targets, the Forge config spec, and the /rtp settings
+  MemFixConfig.java  the 36 targets and the Forge config spec
   Sweeper.java       reflection, staleness rules, purge primitives
   GuavaAccess.java   reflective adapter for Guava multimaps
-  RtpGuard.java      declines /rtp candidates whose chunk is not already generated
-  ChunkPregen.java   generates the /rtp area off-thread at startup
-  RegionIndex.java   reads region-file headers to tell "on disk" from "generated"
 src/test/java/com/linggango/memfix/
   SweeperTest.java    unit tests for the sweep rules
-  RegionIndexTest.java  unit tests for the region-header reader
 tools/
   verify-targets.py  checks every target is a static field in the shipped pack
 ```
@@ -198,10 +198,26 @@ tools/
 export JAVA_HOME=/workspace/tools/jdk-17.0.20.1+1
 export PATH=$JAVA_HOME/bin:$PATH
 ./gradlew clean build --no-daemon --console=plain
-# artifact: build/libs/memfix-1.0.0.jar
+# artifact: build/libs/memfix-1.1.0.jar
 ```
 
 Re-run `./tools/verify-targets.py /path/to/serverpack` after any modpack update.
+
+## History
+
+**1.0.0** also shipped a `/rtp` guard and a startup chunk pregenerator. FTB Essentials'
+`/rtp` generates terrain on the server thread, and the guard declined any candidate whose
+chunk was not already generated so the command would not stall. In practice the pregenerator
+only ever covered a small area (the log showed `pregen: 512-block area already generated,
+skipping`) while the pack's FTB config sets `min_distance: 500` and `max_distance: 2048`, so
+the guard declined nearly every candidate and `/rtp` almost always reported that it could not
+find a location.
+
+**1.1.0** removes the guard, the pregenerator and their `RegionIndex` helper entirely, along
+with the `[memfix.rtp]` config table. Random teleport is now handled by the separate
+`linggango-rtp` mod, which performs the search off the server tick thread instead of refusing
+to search. The `memfix-common.toml` written by 1.0.0 can be left on disk; Forge ignores the
+now-unknown `[memfix.rtp]` keys.
 
 ## Notes and limitations
 
