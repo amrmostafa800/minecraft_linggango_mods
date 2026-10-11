@@ -58,6 +58,7 @@ public final class RtpConfig {
     private static final ForgeConfigSpec.BooleanValue EXISTING_CHUNKS_ONLY;
     private static final ForgeConfigSpec.IntValue CHUNK_MARGIN;
     private static final ForgeConfigSpec.BooleanValue RESPECT_CLAIMS;
+    private static final ForgeConfigSpec.BooleanValue DEBUG;
     private static final ForgeConfigSpec.ConfigValue<List<? extends String>> EXCLUDED_BIOMES;
 
     static {
@@ -90,6 +91,10 @@ public final class RtpConfig {
                 .defineInRange("chunkMargin", 1, 0, 2);
         RESPECT_CLAIMS = b.comment("Skip candidates inside an FTB Chunks claim.")
                 .define("respectClaims", true);
+        DEBUG = b.comment("Log each /rtp search decision (candidates rejected on disk, landing",
+                        "rejections, retries) at INFO. Off by default; turn it on to see exactly",
+                        "why a search fails or takes long.")
+                .define("debug", false);
         EXCLUDED_BIOMES = b.comment("Biomes /rtp will not land in, as 'namespace:path'.")
                 .defineListAllowEmpty("excludedBiomes", DEFAULT_EXCLUDED_BIOMES,
                         o -> o instanceof String);
@@ -171,6 +176,15 @@ public final class RtpConfig {
             return RESPECT_CLAIMS.get();
         } catch (Throwable t) {
             return true;
+        }
+    }
+
+    /** True when the search should log each decision it makes. Default false. */
+    public static boolean debug() {
+        try {
+            return DEBUG.get();
+        } catch (Throwable t) {
+            return false;
         }
     }
 

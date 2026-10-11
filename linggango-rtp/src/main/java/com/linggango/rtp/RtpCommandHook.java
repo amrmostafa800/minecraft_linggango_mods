@@ -76,14 +76,28 @@ public final class RtpCommandHook {
             boolean enabled = RtpConfig.enabled();
 
             if (shouldIntercept(root, dimensionId, onCooldown, ftbAvailable, rtpEnabled, enabled)) {
+                debug("intercepting /rtp for %s", player.getUUID());
                 event.setCanceled(true);
                 RtpSearch.start(player);
+            } else {
+                debug("not intercepting /rtp: dim=%s cooldown=%s ftb=%s ftbEnabled=%s modEnabled=%s",
+                        dimensionId, onCooldown, ftbAvailable, rtpEnabled, enabled);
             }
         } catch (Throwable t) {
             // Any failure must leave the command alone: FTB still owns /rtp and
             // will handle (or refuse) it. Never cancel here, but do not swallow
             // the failure silently.
             warnOnce(t);
+        }
+    }
+
+    private static void debug(String format, Object... args) {
+        try {
+            if (RtpConfig.debug()) {
+                LinggangoRtp.LOGGER.info("[rtp] " + String.format(format, args));
+            }
+        } catch (Throwable t) {
+            // Logging must never affect command handling.
         }
     }
 

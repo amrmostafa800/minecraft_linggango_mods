@@ -129,6 +129,9 @@ public final class RtpSearch {
         Search search = new Search(playerId, player, level, borderHalfSize, minRadius, maxRadius,
                 regionDir, chunkMargin);
         PENDING.put(playerId, search);
+        debug("start player=%s center=(%d,%d) radius=%d..%d attempts=%d diskGate=%s margin=%d",
+                playerId, RtpConfig.centerX(), RtpConfig.centerZ(), minRadius, maxRadius,
+                RtpConfig.findAttempts(), existingChunksOnly, chunkMargin);
         schedule(search, 1);
     }
 
@@ -220,6 +223,7 @@ public final class RtpSearch {
 
         int attempts = Math.max(1, RtpConfig.findAttempts());
         if (attemptNumber > attempts) {
+            debug("exhausted after %d attempts (no valid landing found)", attempts);
             serverExecute(search, () -> message(search.player, "Could not find a valid location"),
                     search.playerId);
             finish(search.playerId);
@@ -241,10 +245,13 @@ public final class RtpSearch {
         // terrain costs microseconds and is retried immediately.
         if (search.regionDir != null
                 && !ChunkIndex.neighborhoodOnDisk(search.regionDir, x >> 4, z >> 4, search.chunkMargin)) {
+            debug("attempt %d: (%d,%d) rejected, chunk not on disk", attemptNumber, x, z);
             schedule(search, attemptNumber + 1);
             return;
         }
 
+        debug("attempt %d: candidate (%d,%d), requesting chunk (%d,%d)",
+                attemptNumber, x, z, x >> 4, z >> 4);
         CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future =
                 search.level.getChunkSource().getChunkFuture(x >> 4, z >> 4, ChunkStatus.FULL, true);
         future.whenComplete((either, err) -> {
@@ -299,13 +306,23 @@ public final class RtpSearch {
                     BlockPos landing = new BlockPos(x, safeY.getAsInt(), z);
                     if (!claimsBlock(search, landing)) {
                         if (FtbAccess.teleportTo(search.player, search.level.dimension(), landing)) {
+                            debug("attempt %d: landed at (%d,%d,%d)", attemptNumber, x, landing.getY(), z);
                             message(search.player, "Found a location after " + attemptNumber + " attempts");
                             finish(search.playerId);
                             return;
                         }
+                        debug("attempt %d: (%d,%d) FTB refused the teleport", attemptNumber, x, z);
+                    } else {
+                        debug("attempt %d: (%d,%d) claimed by another team", attemptNumber, x, z);
                     }
+                } else {
+                    debug("attempt %d: (%d,%d) no safe landing column", attemptNumber, x, z);
                 }
+            } else {
+                debug("attempt %d: (%d,%d) biome excluded (%s)", attemptNumber, x, z, biomeId);
             }
+        } else {
+            debug("attempt %d: (%d,%d) chunk load failed", attemptNumber, x, z);
         }
 
         schedule(search, attemptNumber + 1);
@@ -367,6 +384,21 @@ public final class RtpSearch {
             player.sendSystemMessage(Component.literal(text));
         } catch (Throwable t) {
             // A player who cannot receive a message is about to leave anyway.
+        }
+    }
+
+    /**
+     * Logs a search decision at INFO when {@code debug} is on. The search runs
+     * off the tick thread and the player only ever sees the outcome, so without
+     * this a failed or slow search is invisible in the server log.
+     */
+    private static void debug(String format, Object... args) {
+        try {
+            if (RtpConfig.debug()) {
+                LinggangoRtp.LOGGER.info("[rtp] " + String.format(format, args));
+            }
+        } catch (Throwable t) {
+            // Logging must never break the search.
         }
     }
 

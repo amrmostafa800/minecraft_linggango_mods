@@ -10,9 +10,9 @@ the old `linggango-memfix` `/rtp` guard and pregenerator were removed in memfix
 
 | | |
 | --- | --- |
-| File | `build/libs/linggango_rtp-1.1.0.jar` |
-| Size | 29,982 bytes |
-| SHA-256 | `dc7cdf8c454bc7859ed491e52dbf3a58829a6048c83909d39fc5b7f32783489d` |
+| File | `build/libs/linggango_rtp-1.1.1.jar` |
+| Size | 31,514 bytes |
+| SHA-256 | `3a7be0ced3a9fdadfc4be7313f0d5acbf55fc1f562e65b8467ccdc91400ce921` |
 
 The jar is **not committed to git** (`build/` is gitignored). Build it with:
 
@@ -21,7 +21,7 @@ export JAVA_HOME=/workspace/tools/jdk-17.0.13+11
 export PATH=$JAVA_HOME/bin:$PATH
 cd linggango-rtp
 sh gradlew clean build --no-daemon --console=plain
-sha256sum build/libs/linggango_rtp-1.1.0.jar
+sha256sum build/libs/linggango_rtp-1.1.1.jar
 ```
 
 The build is not bit-reproducible (jar entry timestamps), so the SHA-256 above
@@ -77,6 +77,29 @@ The config had to go: Forge merges an existing config over the new spec, so the
 would have survived and the fix would not have taken effect. The old file is in
 the backup; a fresh one with the 1.1.0 defaults is written on the next start.
 
+### Deploy 3 - rtp 1.1.1 (diagnostics)
+
+The operator reported "still same issue" after 1.1.0. Re-investigation showed the
+server stalls in a way that matches FTB's own synchronous `findBlockPos` (it
+force-loads a chunk per candidate, up to `max_tries` times, around origin) rather
+than this mod's async search, and that the server log carries **no** evidence
+either way: player system messages (FTB's "Looking for random location..." and
+this mod's "Found a location after N attempts") are not written to the console,
+so a search cannot be seen in `latest.log`.
+
+1.1.1 therefore adds a `debug` config option. When on, the mod logs every
+decision: the interception decision, the captured search geometry, each rejected
+candidate and why (not on disk, excluded biome, no safe column, claim, FTB
+refused), and the outcome. It changes no search behaviour.
+
+| Action | Result |
+| --- | --- |
+| Backup | `config/linggango-rtp-common.toml.bak-20261011-030200` on the server |
+| Mod | `mods/linggango_rtp-1.1.0.jar` renamed `*.removed-20261011-030148`, `mods/linggango_rtp-1.1.1.jar` uploaded |
+| Config | `debug = true` added to `config/linggango-rtp-common.toml` |
+
+**Turn `debug` back off once diagnosed** (it logs per candidate).
+
 ## Verify after the next start
 
 Watch `logs/latest.log` for:
@@ -88,10 +111,13 @@ Watch `logs/latest.log` for:
 
 Then, as an **op in the overworld**, run `/rtp` several times:
 
+- With `debug = true`, `latest.log` now shows `[rtp] intercepting /rtp for <uuid>`
+  followed by the search geometry and per-candidate lines. This is the ground
+  truth: if the `intercepting` line is missing, the hook is not firing and the
+  search is still FTB's; if it is present, the mod owns `/rtp`.
 - Each run should report a found location and land in terrain, and it should be
   **fast** (well under a second, not ~a minute). If it reports "Could not find a
-  valid location", the on-disk gate is rejecting too much - check the config
-  (see below) and record the log lines.
+  valid location", the `[rtp] attempt N: ... rejected ...` lines say why.
 - **Watch the CPU and `logs/latest.log` for `Can't keep up!` / `ServerHangWatchdog`.**
   This is the specific regression 1.1.0 fixes: on 1.0.0 the server stalled up to
   24.6 s per `/rtp`. There must be **no** long-tick report during or after a
@@ -121,6 +147,7 @@ exists.
 | `existingChunksOnly` | `true` | Never generate terrain; only land in chunks already on disk |
 | `chunkMargin` | `1` | Neighbour chunks required on disk (1 = full 3x3) |
 | `respectClaims` | `true` | Skip candidates inside an FTB Chunks claim |
+| `debug` | `false` | Log every search decision at INFO (diagnostics only) |
 | `excludedBiomes` | oceans, rivers, deep dark, mushroom fields, void, outer End | Biomes to avoid |
 
 `minRadius`/`maxRadius` are this mod's own bounds. FTB's `rtp.min_distance` /
@@ -135,7 +162,7 @@ take effect, delete the config file (as deploy 2 did) so it regenerates.
 
 1. Remove the mod:
    ```bash
-   rm mods/linggango_rtp-1.1.0.jar
+   rm mods/linggango_rtp-1.1.1.jar
    ```
 2. Optionally restore rtp 1.0.0 (not recommended - it stalls the server):
    ```bash
@@ -161,5 +188,5 @@ This mod was built, unit-tested (27 tests) and statically inspected, but has
 Minecraft client, so the interception, the on-disk gate, the async chunk load,
 the landing validation and the FTB delegation have not run in-game. 1.0.0's
 first live run stalled the server (24.6 s); 1.1.0 is the fix for that, and it is
-unproven. The verify section above is the acceptance test. If any of it fails,
-roll back.
+unproven. 1.1.1 adds only diagnostics (`debug`) and does not change behaviour.
+The verify section above is the acceptance test. If any of it fails, roll back.

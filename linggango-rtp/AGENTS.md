@@ -9,24 +9,25 @@ MC 1.20.1 / Forge 47.4.20 / Java 17.
 export JAVA_HOME=/workspace/tools/jdk-17.0.13+11
 export PATH=$JAVA_HOME/bin:$PATH
 sh gradlew clean build --no-daemon --console=plain
-# artifact: build/libs/linggango_rtp-1.0.0.jar
+# artifact: build/libs/linggango_rtp-1.1.1.jar
 ```
 
 `gradlew` is committed non-executable (matching `linggango-memfix`); invoke it as `sh gradlew` or
 `chmod +x gradlew` first. The first build downloads and decompiles Minecraft through ForgeGradle
-and takes a few minutes. Later builds are seconds. The unit suite (21 tests) runs as part of
+and takes a few minutes. Later builds are seconds. The unit suite (27 tests) runs as part of
 `build`.
 
 ## Status
 
-**Deployed to the live server 2026-10-11; not yet verified in-game.** 1.1.0 is the current artifact:
+**Deployed to the live server 2026-10-11; not yet verified in-game.** 1.1.1 is the current artifact:
 `sh gradlew clean build` is `BUILD SUCCESSFUL` with 27 tests passing (0 failed, 0 skipped), and the
 built jar was statically inspected - but this environment has no Minecraft client, so the `/rtp`
 path has never run against the game. 1.0.0's first live `/rtp` stalled the server (up to 24.6 s,
 491 ticks behind) because it generated terrain; 1.1.0 adds the on-disk gate described below to stop
-that. The memfix `/rtp` guard was removed in the same change (memfix 1.1.0), so there is no
-fallback. Run the acceptance test in [`docs/DEPLOY.md`](docs/DEPLOY.md) after the next server start
-and roll back if it fails.
+that. 1.1.1 adds a `debug` option that logs every search decision (the server log otherwise carries
+no trace of a search, because player system messages are not logged). The memfix `/rtp` guard was
+removed in the same change (memfix 1.1.0), so there is no fallback. Run the acceptance test in
+[`docs/DEPLOY.md`](docs/DEPLOY.md) after the next server start and roll back if it fails.
 
 ## Behaviour
 

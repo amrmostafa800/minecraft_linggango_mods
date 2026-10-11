@@ -5,12 +5,13 @@ Java 17). It replaces FTB Essentials' synchronous `/rtp` location search with an
 asynchronous one, so a random teleport can reach terrain that has never been generated without
 stalling the server thread.
 
-> **Status:** 1.1.0 deployed to the live server on 2026-10-11 but **not yet verified in-game** - no
+> **Status:** 1.1.1 deployed to the live server on 2026-10-11 but **not yet verified in-game** - no
 > Minecraft client exists in the build environment, so the `/rtp` path has never actually run
-> against the game. The mod builds cleanly and passes its unit suite (27 tests). 1.1.0 adds the
+> against the game. The mod builds cleanly and passes its unit suite (27 tests). 1.1.0 added the
 > `existingChunksOnly` gate that stops a search from generating terrain (1.0.0 stalled the server
-> for up to 24 s per `/rtp`); see [`docs/DEPLOY.md`](docs/DEPLOY.md) for the acceptance test and
-> rollback.
+> for up to 24 s per `/rtp`); 1.1.1 adds a `debug` option that logs every search decision so the
+> next live `/rtp` is conclusive in the server log. See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the
+> acceptance test and rollback.
 
 ## Intent
 
@@ -191,18 +192,18 @@ test, tuning, and rollback.
 export JAVA_HOME=/workspace/tools/jdk-17.0.13+11
 export PATH=$JAVA_HOME/bin:$PATH
 sh gradlew clean build --no-daemon --console=plain
-# artifact: build/libs/linggango_rtp-1.0.0.jar
+# artifact: build/libs/linggango_rtp-1.1.1.jar
 ```
 
 `gradlew` is committed non-executable (matching the sibling mods), so invoke it as `sh gradlew`
 or `chmod +x gradlew` first. The first build downloads and decompiles Minecraft through
-ForgeGradle and takes a few minutes; the unit suite (21 tests) runs as part of `build`.
+ForgeGradle and takes a few minutes; the unit suite (27 tests) runs as part of `build`.
 
 ## Release verification
 
-- Build: `BUILD SUCCESSFUL`, **21 tests passed, 0 failed, 0 skipped**.
-- Artifact: `build/libs/linggango_rtp-1.0.0.jar`, 24,288 bytes, SHA-256
-  `db2fcdcce22ac703113e8d2419c049f2ff93196999809112a03333055fe01197` (the deployed build; jars are
+- Build: `BUILD SUCCESSFUL`, **27 tests passed, 0 failed, 0 skipped**.
+- Artifact: `build/libs/linggango_rtp-1.1.1.jar`, 31,514 bytes, SHA-256
+  `3a7be0ced3a9fdadfc4be7313f0d5acbf55fc1f562e65b8467ccdc91400ce921` (the deployed build; jars are
   not bit-reproducible, so a rebuild yields a different hash).
 - The jar contains `META-INF/mods.toml`, `pack.mcmeta` and the seven mod classes; it bundles no
   FTB classes (FTB access is reflection-only).
