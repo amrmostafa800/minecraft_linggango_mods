@@ -213,7 +213,7 @@ public final class FtbAccess {
 
     private static void warnOnce(String message, Throwable t) {
         if (WARNED.compareAndSet(false, true)) {
-            LinggangoRtp.LOGGER.warn("[rtp] {} ({})", message, t.toString());
+            LinggangoRtp.LOGGER.warn("[rtp] " + message, t);
         }
     }
 

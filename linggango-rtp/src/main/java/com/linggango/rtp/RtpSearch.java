@@ -26,23 +26,23 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkStatus;
 
 /**
- * Runs the asynchronous {@code /rtp} search entirely off the server tick thread.
+ * Runs the asynchronous {@code /rtp} search off the server tick thread.
  *
  * <p>The candidate loop runs on a single daemon worker thread this class owns.
- * In 1.20.1 {@link ServerChunkCache#getChunkFuture} behaves differently by
- * calling thread: on the server thread it pumps the server loop via
- * {@code managedBlock} and stalls the tick until the chunk is FULL, but off the
- * server thread it merely schedules the load onto the main-thread queue and
- * returns immediately. The worker therefore calls {@code getChunkFuture} off
- * the server thread and never blocks the tick; it only ever <em>enqueues</em>
- * work on the server thread via {@code server.execute(...)}.
+ * Candidate picking and the on-disk gate are pure and run on the worker; the
+ * chunk request and every read of live world state (biome, heightmap, FTB
+ * Chunks claim) plus the teleport itself run on the server thread.
  *
- * <p>Every read of live world state (biome, heightmap, FTB Chunks claim) and the
- * teleport itself run on the server thread inside {@link #onChunkReady}; the
- * worker itself touches only the immutable geometry captured at
- * {@link #start} time (the {@link ServerLevel} reference, the world-border
- * half-size and the radii), so it never reads world or border state directly.
- * This code never calls {@code join}/{@code get} on the future.
+ * <p>The chunk request MUST run on the server thread. In 1.20.1
+ * {@link ServerChunkCache#getChunkFuture} only force-loads a chunk when called
+ * on the server thread, where it adds the ticket, runs the distance-manager
+ * update and pumps the chunk system via {@code managedBlock} until the chunk is
+ * FULL. Called off the server thread it merely enqueues that work and returns
+ * the holder's <em>current</em> future; for a chunk that is not already loaded
+ * that future is the shared, already completed {@code ChunkHolder.UNLOADED}
+ * sentinel, so awaiting it off-thread reports a load failure before the load
+ * even begins. The worker therefore hands each candidate to the server thread
+ * ({@code server.execute(...)}) and never requests a chunk itself.
  *
  * <p>A search is single-flight per player: {@link #start} refuses while one is
  * already pending. The pending entry is removed on every exit path (success,
@@ -252,18 +252,55 @@ public final class RtpSearch {
 
         debug("attempt %d: candidate (%d,%d), requesting chunk (%d,%d)",
                 attemptNumber, x, z, x >> 4, z >> 4);
-        CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future =
-                search.level.getChunkSource().getChunkFuture(x >> 4, z >> 4, ChunkStatus.FULL, true);
-        future.whenComplete((either, err) -> {
-            if (err != null) {
-                // An exceptional completion would otherwise leave the pending
-                // entry behind forever, since the callback never runs.
-                finish(search.playerId);
-                return;
-            }
-            serverExecute(search, () -> onChunkReady(search, attemptNumber, x, z, either),
-                    search.playerId);
-        });
+        // The chunk request must run on the server thread. In 1.20.1
+        // ServerChunkCache#getChunkFuture only force-loads the chunk (it adds the
+        // ticket, runs the distance-manager update and pumps the chunk system
+        // through managedBlock) when it is called ON the server thread; off it,
+        // the call merely enqueues that work and returns the holder's current
+        // future, which for a not-yet-loaded chunk is the shared, already
+        // completed ChunkHolder.UNLOADED sentinel. Awaiting that off-thread
+        // future therefore reports "chunk load failed" before the load ever
+        // starts. So the worker only hands the request to the server thread.
+        serverExecute(search, () -> requestChunk(search, attemptNumber, x, z), search.playerId);
+    }
+
+    /**
+     * Requests the candidate chunk on the server thread and, once it is
+     * available, validates it through {@link #onChunkReady}. Called only from
+     * the tick thread. On this thread {@code getChunkFuture} force-loads the
+     * chunk and returns a future that is already complete (it pumps the chunk
+     * system via {@code managedBlock} until the chunk reaches FULL), so the
+     * common path validates inline; the callback is a fallback for the case
+     * where the future is still pending, and never blocks the tick.
+     */
+    private static void requestChunk(Search search, int attemptNumber, int x, int z) {
+        if (!isCurrent(search)) {
+            return;
+        }
+        if (playerGone(search.player, search.level)) {
+            finish(search.playerId);
+            return;
+        }
+
+        CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future;
+        try {
+            future = search.level.getChunkSource().getChunkFuture(x >> 4, z >> 4, ChunkStatus.FULL, true);
+        } catch (Throwable t) {
+            onChunkReady(search, attemptNumber, x, z, null);
+            return;
+        }
+
+        Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure> either = future.getNow(null);
+        if (either != null) {
+            onChunkReady(search, attemptNumber, x, z, either);
+            return;
+        }
+        // Defensive: the server-thread call blocks until the chunk is ready, so
+        // this should be unreachable. If the future is somehow still pending,
+        // resume from the callback rather than blocking the tick.
+        future.whenComplete((done, err) -> serverExecute(search,
+                () -> onChunkReady(search, attemptNumber, x, z, err != null ? null : done),
+                search.playerId));
     }
 
     /**
@@ -281,9 +318,10 @@ public final class RtpSearch {
 
     /**
      * Validates a loaded candidate on the server thread and either teleports or
-     * retries. The {@code Either} may carry a loading failure, in which case the
-     * candidate is simply retried. A retry is re-scheduled onto the worker, not
-     * recursed here, so the server thread only ever enqueues.
+     * retries. A {@code null} {@code either}, or one carrying a loading failure,
+     * means the chunk is unavailable and the candidate is simply retried. A
+     * retry is re-scheduled onto the worker, not recursed here, so the server
+     * thread only ever enqueues the next request.
      */
     private static void onChunkReady(Search search, int attemptNumber, int x, int z,
                                      Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure> either) {
@@ -295,7 +333,7 @@ public final class RtpSearch {
             return;
         }
 
-        ChunkAccess chunk = either.left().orElse(null);
+        ChunkAccess chunk = either == null ? null : either.left().orElse(null);
         if (chunk != null) {
             BlockPos column = new BlockPos(x, 0, z);
             ResourceLocation biomeId = biomeIdAt(search.level, column);

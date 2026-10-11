@@ -161,10 +161,15 @@ public final class LandingValidator {
      * {@code ftbessentials:ignore_rtp} block tag (e.g. leaves, bedrock), so a
      * player is never placed in a canopy or on bedrock. Total: any failure yields
      * empty.
+     *
+     * <p>{@code getHeightmapPos} returns the first position <em>above</em> the
+     * topmost motion-blocking block - the air a player stands in, not the ground
+     * itself - so the ground is the block below it. (Chunk heightmaps store
+     * {@code groundY + 1}, and {@code getHeight} returns that value unchanged.)
      */
     public static OptionalInt findSafeY(ServerLevel level, BlockPos column) {
         try {
-            BlockPos surface = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, column);
+            BlockPos surface = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, column).below();
             BlockState state = level.getBlockState(surface);
 
             if (!state.isSolid()) {
