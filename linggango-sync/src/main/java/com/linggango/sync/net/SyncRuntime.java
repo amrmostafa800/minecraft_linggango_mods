@@ -4,6 +4,7 @@ import com.linggango.sync.cache.ClientCache;
 import com.linggango.sync.config.SyncConfig;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Process-wide runtime state: the traffic monitor, the (client-only) cache and the
@@ -18,8 +19,31 @@ public final class SyncRuntime {
     private static volatile NetworkMonitor monitor;
     private static volatile ClientCache clientCache;
     private static volatile SyncConfig config = SyncConfig.get();
+    private static final DuplicateSuppressor SUPPRESSOR = new DuplicateSuppressor();
+    private static final AtomicLong SUPPRESSED_PACKETS = new AtomicLong();
+    private static final AtomicLong SUPPRESSED_BYTES = new AtomicLong();
 
     private SyncRuntime() {
+    }
+
+    public static DuplicateSuppressor suppressor() {
+        return SUPPRESSOR;
+    }
+
+    /** Records a suppressed payload for the report. */
+    public static void recordSuppressed(int bytes) {
+        SUPPRESSED_PACKETS.incrementAndGet();
+        if (bytes > 0) {
+            SUPPRESSED_BYTES.addAndGet(bytes);
+        }
+    }
+
+    public static long suppressedPackets() {
+        return SUPPRESSED_PACKETS.get();
+    }
+
+    public static long suppressedBytes() {
+        return SUPPRESSED_BYTES.get();
     }
 
     public static boolean monitoring() {

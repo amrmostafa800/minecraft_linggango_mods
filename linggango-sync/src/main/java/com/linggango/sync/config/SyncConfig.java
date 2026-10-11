@@ -45,6 +45,7 @@ public final class SyncConfig {
     private int packetHistoryMinutes = 5;
     private boolean logPerPacket = false;
     private boolean autoReportOnStop = true;
+    private boolean suppressDuplicates = false;
 
     private int cacheMaxEntries = 4096;
     private long cacheMaxBytes = 64L * 1024L * 1024L;
@@ -99,6 +100,11 @@ public final class SyncConfig {
             autoReportOnStop = bool(debug, "autoReportOnStop", autoReportOnStop);
         }
 
+        JsonObject optimisation = object(root, "optimisation");
+        if (optimisation != null) {
+            suppressDuplicates = bool(optimisation, "suppressDuplicates", suppressDuplicates);
+        }
+
         JsonObject cache = object(root, "cache");
         if (cache != null) {
             cacheMaxEntries = integer(cache, "maxEntries", cacheMaxEntries);
@@ -147,6 +153,10 @@ public final class SyncConfig {
         debug.addProperty("logPerPacket", logPerPacket);
         debug.addProperty("autoReportOnStop", autoReportOnStop);
         root.add("debug", debug);
+
+        JsonObject optimisation = new JsonObject();
+        optimisation.addProperty("suppressDuplicates", suppressDuplicates);
+        root.add("optimisation", optimisation);
 
         JsonObject cache = new JsonObject();
         cache.addProperty("maxEntries", cacheMaxEntries);
@@ -248,6 +258,14 @@ public final class SyncConfig {
 
     public boolean autoReportOnStop() {
         return autoReportOnStop;
+    }
+
+    public boolean suppressDuplicates() {
+        return suppressDuplicates;
+    }
+
+    public void setSuppressDuplicates(boolean value) {
+        this.suppressDuplicates = value;
     }
 
     public int cacheMaxEntries() {

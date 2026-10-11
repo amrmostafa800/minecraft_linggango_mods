@@ -21,6 +21,11 @@ public final class NetworkReport {
                 + "  (" + ByteFormat.perMinute(bytes, windowSeconds) + ')');
         lines.add("  average packet: " + String.format(java.util.Locale.ROOT, "%.0f B",
                 packets == 0 ? 0.0 : (double) bytes / packets));
+        long suppressed = SyncRuntime.suppressedPackets();
+        if (suppressed > 0) {
+            lines.add("  suppressed duplicates: " + ByteFormat.count(suppressed) + " packets, "
+                    + ByteFormat.bytes(SyncRuntime.suppressedBytes()));
+        }
         lines.add("");
 
         Map<PacketDirection, NetworkMonitor.Aggregate> directions = monitor.byDirection();

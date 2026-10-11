@@ -5,7 +5,8 @@
   "compatibilityLevel": "JAVA_17",
   "refmap": "linggangosync.refmap.json",
   "mixins": [
-    "PacketEncoderMixin"
+    "PacketEncoderMixin",
+    "ConnectionSendMixin"
   ],
   "client": [],
   "server": [],
