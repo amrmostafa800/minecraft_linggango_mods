@@ -19,12 +19,14 @@ and takes a few minutes. Later builds are seconds. The unit suite (21 tests) run
 
 ## Status
 
-**Deployed to the live server 2026-10-11; not yet verified in-game.** The mod is fully implemented,
-`sh gradlew clean build` is `BUILD SUCCESSFUL` with 21 tests passing (0 failed, 0 skipped), and the
-built jar was statically inspected — but this environment has no Minecraft client, so the `/rtp`
-path has never run against the game. The memfix `/rtp` guard was removed in the same change (memfix
-1.1.0), so there is no fallback. Run the acceptance test in [`docs/DEPLOY.md`](docs/DEPLOY.md) after
-the next server start and roll back if it fails.
+**Deployed to the live server 2026-10-11; not yet verified in-game.** 1.1.0 is the current artifact:
+`sh gradlew clean build` is `BUILD SUCCESSFUL` with 27 tests passing (0 failed, 0 skipped), and the
+built jar was statically inspected - but this environment has no Minecraft client, so the `/rtp`
+path has never run against the game. 1.0.0's first live `/rtp` stalled the server (up to 24.6 s,
+491 ticks behind) because it generated terrain; 1.1.0 adds the on-disk gate described below to stop
+that. The memfix `/rtp` guard was removed in the same change (memfix 1.1.0), so there is no
+fallback. Run the acceptance test in [`docs/DEPLOY.md`](docs/DEPLOY.md) after the next server start
+and roll back if it fails.
 
 ## Behaviour
 
@@ -37,6 +39,12 @@ the next server start and roll back if it fails.
   through to FTB unchanged.
 - Picks a uniformly-by-area candidate in `[minRadius, maxRadius]` around `(centerX, centerZ)`,
   clamped to the world border when the border is smaller than `maxRadius`.
+- **Rejects ungenerated candidates before requesting the chunk.** With `existingChunksOnly` (default
+  on), `ChunkIndex` reads the Anvil region-file header (8 KiB, no chunk pipeline) and the candidate
+  is skipped unless its chunk **and** `chunkMargin` neighbours are already on disk. This is the fix
+  for 1.0.0's stall: requesting a chunk at `FULL` **generates** it when absent, and generation is the
+  expensive, tick-stalling work. The header cache is dropped each server tick so freshly generated
+  terrain becomes eligible.
 - Runs the candidate loop on a dedicated daemon worker thread, so `ServerChunkCache.getChunkFuture`
   is called **off the server tick thread** (in 1.20.1 that schedules the load and returns
   immediately; on the server thread it would `managedBlock`/stall). The immutable geometry
@@ -57,8 +65,8 @@ the next server start and roll back if it fails.
 FTB's decompiled `TeleportCommands` rejects the `ftbessentials:ignore_rtp` **biome** and **block**
 tags and registers `/rtp` only when `FTBEConfig.RTP.isEnabled()`. All three are replicated
 reflectively. `excludedBiomes` is merged with the biome tag (not a replacement). Fail-safe
-directions: unresolved tags → treated as absent (no rejection); `RTP.enabled` → `false` on any
-failure (no interception); the FTB cooldown check → **fails closed** (`true` = "on cooldown" = do
+directions: unresolved tags are treated as absent (no rejection); `RTP.enabled` resolves to `false` on any
+failure (no interception); the FTB cooldown check **fails closed** (`true` = "on cooldown" = do
 not intercept); a `Throwable` in the command hook is logged once and the command still falls through
 to FTB.
 
@@ -80,9 +88,11 @@ under the `[rtp]` table. Getters fall back to these defaults if the config is no
 | `enabled` | `true` | Master switch; `false` disables interception. |
 | `centerX` | `0` | Search centre X (`-30000000..30000000`). |
 | `centerZ` | `0` | Search centre Z (`-30000000..30000000`). |
-| `minRadius` | `0` | Minimum distance from centre (`0..30000000`). |
-| `maxRadius` | `32000` | Maximum distance from centre (`0..30000000`). |
-| `findAttempts` | `10` | Candidates to try before giving up (`1..1000`). |
+| `minRadius` | `500` | Minimum distance from centre (`0..30000000`). |
+| `maxRadius` | `2048` | Maximum distance from centre (`0..30000000`). |
+| `findAttempts` | `40` | Candidates to try before giving up (`1..1000`). |
+| `existingChunksOnly` | `true` | Reject candidates not already on disk (never generate terrain). |
+| `chunkMargin` | `1` | Neighbour margin required on disk, in chunks (`0..2`); `1` = full 3x3. |
 | `respectClaims` | `true` | Skip candidates in a foreign FTB Chunks claim. |
 | `excludedBiomes` | 19 defaults | Biomes `/rtp` will not land in; case-insensitive. |
 
@@ -100,6 +110,8 @@ written to the repo.
 
 1. **No main-thread terrain generation.** Candidates are loaded through
    `ServerChunkCache.getChunkFuture`; nothing may block the server tick waiting on a chunk.
+   `existingChunksOnly` must stay default-on so a search never requests a chunk that does not exist
+   (which generates it). The region-header cache must be invalidated at least once per tick.
 2. **Reflection only.** No compile-time dependency on `ftbessentials`, `ftbchunks` or `ftbteams`.
    `build.gradle` has no mod dependencies and the mod compiles against Forge alone.
 3. **Delegate the teleport to FTB.** The final teleport goes through FTB's

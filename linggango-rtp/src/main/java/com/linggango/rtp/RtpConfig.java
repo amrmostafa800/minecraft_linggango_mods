@@ -55,6 +55,8 @@ public final class RtpConfig {
     private static final ForgeConfigSpec.IntValue MIN_RADIUS;
     private static final ForgeConfigSpec.IntValue MAX_RADIUS;
     private static final ForgeConfigSpec.IntValue FIND_ATTEMPTS;
+    private static final ForgeConfigSpec.BooleanValue EXISTING_CHUNKS_ONLY;
+    private static final ForgeConfigSpec.IntValue CHUNK_MARGIN;
     private static final ForgeConfigSpec.BooleanValue RESPECT_CLAIMS;
     private static final ForgeConfigSpec.ConfigValue<List<? extends String>> EXCLUDED_BIOMES;
 
@@ -68,11 +70,24 @@ public final class RtpConfig {
         CENTER_Z = b.comment("Centre Z of the search area.")
                 .defineInRange("centerZ", 0, -30000000, 30000000);
         MIN_RADIUS = b.comment("Minimum distance from the centre, in blocks.")
-                .defineInRange("minRadius", 0, 0, 30000000);
-        MAX_RADIUS = b.comment("Maximum distance from the centre, in blocks.")
-                .defineInRange("maxRadius", 32000, 0, 30000000);
-        FIND_ATTEMPTS = b.comment("Candidates to try before giving up.")
-                .defineInRange("findAttempts", 10, 1, 1000);
+                .defineInRange("minRadius", 500, 0, 30000000);
+        MAX_RADIUS = b.comment("Maximum distance from the centre, in blocks.",
+                        "Keep this within the world's already-generated area: with",
+                        "existingChunksOnly = true, candidates outside it are rejected",
+                        "and the search simply runs out of attempts.")
+                .defineInRange("maxRadius", 2048, 0, 30000000);
+        FIND_ATTEMPTS = b.comment("Candidates to try before giving up. Each attempt is cheap",
+                        "when existingChunksOnly rejects ungenerated terrain, so this can be high.")
+                .defineInRange("findAttempts", 40, 1, 1000);
+        EXISTING_CHUNKS_ONLY = b.comment("Only consider candidates whose chunk (and its",
+                        "neighbours, see chunkMargin) are already written to disk. This is what",
+                        "keeps a search from generating terrain and stalling the server. Turn it",
+                        "off only to reach never-generated terrain, accepting the tick stalls.")
+                .define("existingChunksOnly", true);
+        CHUNK_MARGIN = b.comment("Neighbour margin required on disk around a candidate, in chunks.",
+                        "1 means the full 3x3 neighbourhood must exist, which is what stops",
+                        "loading a candidate from generating its neighbours.")
+                .defineInRange("chunkMargin", 1, 0, 2);
         RESPECT_CLAIMS = b.comment("Skip candidates inside an FTB Chunks claim.")
                 .define("respectClaims", true);
         EXCLUDED_BIOMES = b.comment("Biomes /rtp will not land in, as 'namespace:path'.")
@@ -113,7 +128,7 @@ public final class RtpConfig {
         try {
             return MIN_RADIUS.get();
         } catch (Throwable t) {
-            return 0;
+            return 500;
         }
     }
 
@@ -121,7 +136,7 @@ public final class RtpConfig {
         try {
             return MAX_RADIUS.get();
         } catch (Throwable t) {
-            return 32000;
+            return 2048;
         }
     }
 
@@ -129,7 +144,25 @@ public final class RtpConfig {
         try {
             return FIND_ATTEMPTS.get();
         } catch (Throwable t) {
-            return 10;
+            return 40;
+        }
+    }
+
+    /** True when candidates must already be written to disk. Default true. */
+    public static boolean existingChunksOnly() {
+        try {
+            return EXISTING_CHUNKS_ONLY.get();
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    /** Neighbour margin, in chunks, required on disk around a candidate. */
+    public static int chunkMargin() {
+        try {
+            return CHUNK_MARGIN.get();
+        } catch (Throwable t) {
+            return 1;
         }
     }
 

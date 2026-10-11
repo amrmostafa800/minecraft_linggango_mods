@@ -1,5 +1,6 @@
 package com.linggango.rtp;
 
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Random;
@@ -52,7 +53,7 @@ public final class RtpSearch {
 
     private static final Map<UUID, Search> PENDING = new ConcurrentHashMap<>();
     /** Sentinel value marking a claimed-but-not-yet-built search. */
-    private static final Search CLAIM = new Search(null, null, null, 0.0, 0, 0);
+    private static final Search CLAIM = new Search(null, null, null, 0.0, 0, 0, null, 0);
 
     /** Single daemon worker; the candidate loop and chunk loads run here. */
     private static final Object WORKER_LOCK = new Object();
@@ -95,6 +96,9 @@ public final class RtpSearch {
         int minRadius;
         int maxRadius;
         double borderHalfSize;
+        Path regionDir;
+        boolean existingChunksOnly;
+        int chunkMargin;
         try {
             level = player.serverLevel();
         } catch (Throwable t) {
@@ -114,12 +118,16 @@ public final class RtpSearch {
             maxRadius = RtpConfig.maxRadius();
             minRadius = RtpConfig.minRadius();
             borderHalfSize = borderHalfSize(level, maxRadius);
+            existingChunksOnly = RtpConfig.existingChunksOnly();
+            chunkMargin = RtpConfig.chunkMargin();
+            regionDir = existingChunksOnly ? ChunkIndex.regionDir(level) : null;
         } catch (Throwable t) {
             finish(playerId);
             return;
         }
 
-        Search search = new Search(playerId, player, level, borderHalfSize, minRadius, maxRadius);
+        Search search = new Search(playerId, player, level, borderHalfSize, minRadius, maxRadius,
+                regionDir, chunkMargin);
         PENDING.put(playerId, search);
         schedule(search, 1);
     }
@@ -224,6 +232,18 @@ public final class RtpSearch {
                 search.borderHalfSize);
         int x = candidate[0];
         int z = candidate[1];
+
+        // Reject terrain that is not already on disk before asking the chunk
+        // system for it. Requesting a chunk at FULL status loads it if it
+        // exists, but GENERATES it if it does not - the exact work that stalls
+        // the server tick. Reading the region header answers this without
+        // touching the chunk pipeline, so a candidate in never-generated
+        // terrain costs microseconds and is retried immediately.
+        if (search.regionDir != null
+                && !ChunkIndex.neighborhoodOnDisk(search.regionDir, x >> 4, z >> 4, search.chunkMargin)) {
+            schedule(search, attemptNumber + 1);
+            return;
+        }
 
         CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future =
                 search.level.getChunkSource().getChunkFuture(x >> 4, z >> 4, ChunkStatus.FULL, true);
@@ -359,9 +379,13 @@ public final class RtpSearch {
         final double borderHalfSize;
         final int minRadius;
         final int maxRadius;
+        /** Region directory to gate candidates on, or null when the gate is off. */
+        final Path regionDir;
+        final int chunkMargin;
 
         Search(UUID playerId, ServerPlayer player, ServerLevel level,
-               double borderHalfSize, int minRadius, int maxRadius) {
+               double borderHalfSize, int minRadius, int maxRadius,
+               Path regionDir, int chunkMargin) {
             this.playerId = playerId;
             this.player = player;
             this.level = level;
@@ -369,6 +393,8 @@ public final class RtpSearch {
             this.borderHalfSize = borderHalfSize;
             this.minRadius = minRadius;
             this.maxRadius = maxRadius;
+            this.regionDir = regionDir;
+            this.chunkMargin = chunkMargin;
         }
     }
 }

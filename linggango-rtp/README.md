@@ -5,24 +5,26 @@ Java 17). It replaces FTB Essentials' synchronous `/rtp` location search with an
 asynchronous one, so a random teleport can reach terrain that has never been generated without
 stalling the server thread.
 
-> **Status:** deployed to the live server on 2026-10-11 with the memfix `/rtp` guard removed, but
-> **not yet verified in-game** — no Minecraft client exists in the build environment, so the `/rtp`
-> path has never actually run against the game. The mod is fully implemented, builds cleanly and
-> passes its unit suite (21 tests). The acceptance test to run after the next server start is in
-> [`docs/DEPLOY.md`](docs/DEPLOY.md); roll back if it fails.
+> **Status:** 1.1.0 deployed to the live server on 2026-10-11 but **not yet verified in-game** - no
+> Minecraft client exists in the build environment, so the `/rtp` path has never actually run
+> against the game. The mod builds cleanly and passes its unit suite (27 tests). 1.1.0 adds the
+> `existingChunksOnly` gate that stops a search from generating terrain (1.0.0 stalled the server
+> for up to 24 s per `/rtp`); see [`docs/DEPLOY.md`](docs/DEPLOY.md) for the acceptance test and
+> rollback.
 
 ## Intent
 
 FTB Essentials' `/rtp` picks a random candidate and then blocks the calling (server) thread while
 the chunk generates, once per candidate up to `max_tries` times. On the Linggango pack that means
-players can only ever be placed in terrain that is already generated, and each attempt in fresh
-terrain freezes every other player for the duration of the generation.
+each attempt in fresh terrain freezes every other player for the duration of the generation, and
+because the search rarely finds terrain that is already generated it usually runs to exhaustion and
+reports failure.
 
-This mod owns `/rtp` and nothing else. It picks candidates across a bounded spread, loads each
-chunk **off the server tick thread** (on a dedicated daemon worker), validates the landing on the
-server thread when the chunk is ready, retries a bounded number of times, and then delegates the
-actual teleport back to FTB so cooldowns, warmups, teleport history and dimension rules are
-unchanged.
+This mod owns `/rtp` and nothing else. It picks candidates across a bounded spread, rejects
+candidates whose chunk is not already on disk (so it never generates terrain), loads the survivors
+**off the server tick thread** (on a dedicated daemon worker), validates the landing on the server
+thread when the chunk is ready, retries a bounded number of times, and then delegates the actual
+teleport back to FTB so cooldowns, warmups, teleport history and dimension rules are unchanged.
 
 ## Non-goals
 
@@ -39,8 +41,11 @@ unchanged.
   cooldown, only while FTB Essentials is present, only while FTB's own `RTP.enabled` config gate is
   on, and only while the mod is `enabled`. In every other case the event is left alone and FTB's
   own path (including its cooldown message, warm-up, End blacklist and history) runs untouched.
-- Picks a uniformly-by-area random point within a configured radius (default 32,000 blocks) of a
+- Picks a uniformly-by-area random point within a configured radius (default 2,048 blocks) of a
   configurable center (default world origin), clamped to the world border.
+- Rejects any candidate whose chunk, and its immediate neighbours, are not already written to disk,
+  by reading the Anvil region-file header (default on; `existingChunksOnly` / `chunkMargin`). This is
+  what keeps the search from generating terrain.
 - Runs the whole candidate loop on a dedicated daemon worker thread this mod owns, so
   `ServerChunkCache.getChunkFuture` is called **off the server tick thread**. In 1.20.1 that call
   schedules the chunk load on the main-thread queue and returns immediately; called on the server
@@ -70,8 +75,8 @@ FTB Essentials' decompiled `TeleportCommands` rejects biomes in the `ftbessentia
 biome tag, rejects surface blocks in the `ftbessentials:ignore_rtp` block tag (e.g.
 `#minecraft:leaves`, `minecraft:bedrock`), and only registers `/rtp` at all when
 `FTBEConfig.RTP.isEnabled()` is true. All three are replicated here, reflectively (no compile-time
-FTB dependency): the mod's config `excludedBiomes` list is **merged with** — not a replacement for
-— the biome tag, and interception is suppressed entirely when FTB's own gate is off so the command
+FTB dependency): the mod's config `excludedBiomes` list is **merged with** - not a replacement for
+- the biome tag, and interception is suppressed entirely when FTB's own gate is off so the command
 behaves exactly as stock FTB. These lookups fail safe: a tag that cannot be resolved is treated as
 absent (no tag rejection), and the `RTP.enabled` gate resolves to `false` on any failure (no
 interception). The FTB cooldown check also **fails closed** (a broken reflective call is treated as
@@ -88,9 +93,31 @@ smaller than the pack's `rtp.max_distance: 2048`), so **memfix 1.1.0 removed the
 guard and pregenerator entirely**. Random teleport is now this mod's job alone;
 there is no fallback if this mod fails to intercept.
 
+### Why `existingChunksOnly` (the 1.0.0 stall)
+
+1.0.0 requested each candidate chunk with `getChunkFuture(x, z, FULL, true)`. Off the server thread
+that call does not *block*, but requesting a chunk that does not exist still **generates** it - and
+FULL-status generation runs the structure and feature pipeline over the surrounding chunks, which
+is heavy and effectively single-threaded. With the default `maxRadius` of 32,000 blocks, almost
+every candidate landed in never-generated terrain, so a single `/rtp` could generate dozens of
+chunks. On the live server that produced `Can't keep up!` reports with stalls up to **24.6 s (491
+ticks behind)** per command, and the search still failed.
+
+The fix is not to make generation faster - it is to never trigger it. `ChunkIndex` reads the Anvil
+region-file header (8 KiB, no chunk pipeline) and the search only proceeds when the candidate chunk
+**and its neighbours** are already on disk. `chunkMargin = 1` requires the full 3x3, because loading
+a chunk at FULL also pulls in its neighbours. A candidate in fresh terrain is now rejected in
+microseconds, so `findAttempts` can be raised safely and the search is fast. The region-header
+cache is dropped every server tick, so terrain that has just been generated becomes eligible.
+
+The honest trade-off: with the gate on, `/rtp` can only land in terrain that already exists (the
+same limitation FTB's own search effectively has). To reach fresh terrain you must turn the gate
+off, and accept the stalls. If you want to *extend* the generated area cheaply and off-thread, that
+is a separate feature (a chunk pregenerator), not this mod.
+
 ## Configuration
 
-The config is written to `config/linggango-rtp-common.toml` (note the hyphenated name — it is
+The config is written to `config/linggango-rtp-common.toml` (note the hyphenated name - it is
 fixed in code and does not follow the mod id). All keys live under the `[rtp]` table:
 
 | Key | Type | Default | Meaning |
@@ -98,14 +125,27 @@ fixed in code and does not follow the mod id). All keys live under the `[rtp]` t
 | `enabled` | boolean | `true` | Master switch. When `false` the mod does not intercept `/rtp`. |
 | `centerX` | int | `0` | Centre X of the search area. Range `-30000000..30000000`. |
 | `centerZ` | int | `0` | Centre Z of the search area. Range `-30000000..30000000`. |
-| `minRadius` | int | `0` | Minimum distance from the centre, in blocks. Range `0..30000000`. |
-| `maxRadius` | int | `32000` | Maximum distance from the centre, in blocks. Range `0..30000000`. |
-| `findAttempts` | int | `10` | Candidates to try before giving up. Range `1..1000`. |
+| `minRadius` | int | `500` | Minimum distance from the centre, in blocks. Range `0..30000000`. |
+| `maxRadius` | int | `2048` | Maximum distance from the centre, in blocks. Range `0..30000000`. |
+| `findAttempts` | int | `40` | Candidates to try before giving up. Range `1..1000`. |
+| `existingChunksOnly` | boolean | `true` | Only land in chunks already written to disk, so a search never generates terrain. |
+| `chunkMargin` | int | `1` | Neighbour margin required on disk, in chunks (`1` = full 3x3). Range `0..2`. |
 | `respectClaims` | boolean | `true` | Skip candidates inside an FTB Chunks claim the player is not a member/ally of. |
 | `excludedBiomes` | list of `namespace:path` | see below | Biomes `/rtp` will not land in. |
 
 Every getter falls back to the default above if the config is not yet loaded, so a read before
 Forge finishes config loading is safe.
+
+`existingChunksOnly` is what makes the search cheap. FTB's own `/rtp` (and the version of this mod
+before 1.1.0) requests each candidate chunk at `FULL` status, which **generates** the chunk when it
+does not exist - a multi-second, single-threaded stall that freezes the whole server. With the gate
+on, a candidate is rejected in microseconds by reading the region-file header, and only terrain
+that is already on disk is ever loaded. See *Why existingChunksOnly* below.
+
+The three search-shape keys should agree with the pack's `rtp.min_distance` / `rtp.max_distance`
+(FTB Essentials). `maxRadius` sets the outer reach; a candidate outside the generated world is
+rejected by the gate, so a `maxRadius` far beyond the generated area just means most attempts are
+wasted. The shipped `500` / `2048` mirror FTB's own `min_distance` / `max_distance`.
 
 Default `excludedBiomes` (EssentialsX's ocean/river set plus the Linggango additions):
 

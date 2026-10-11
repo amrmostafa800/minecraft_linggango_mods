@@ -2,6 +2,7 @@ package com.linggango.rtp;
 
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.server.ServerStoppedEvent;
@@ -52,6 +53,18 @@ public class LinggangoRtp {
         @SubscribeEvent
         public void onServerStopped(ServerStoppedEvent event) {
             RtpSearch.cancelAll();
+        }
+
+        /**
+         * Generation writes chunks into region files asynchronously, so the
+         * region-header cache the on-disk gate reads must not outlive a tick or
+         * it would keep rejecting terrain that has just appeared.
+         */
+        @SubscribeEvent
+        public void onServerTick(TickEvent.ServerTickEvent event) {
+            if (event.phase == TickEvent.Phase.END) {
+                ChunkIndex.invalidate();
+            }
         }
     }
 }
