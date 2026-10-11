@@ -6,6 +6,9 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.mojang.datafixers.util.Either;
 
@@ -22,17 +25,23 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkStatus;
 
 /**
- * Runs the asynchronous {@code /rtp} search.
+ * Runs the asynchronous {@code /rtp} search entirely off the server tick thread.
  *
- * <p>Each attempt picks a uniformly-by-area candidate, then loads its chunk with
- * {@link ServerChunkCache#getChunkFuture}. This is the same pattern the sibling
- * mod {@code linggango-memfix}'s {@code ChunkPregen} uses: on the server thread
- * {@code getChunkFuture} pumps the server loop via {@code managedBlock} until
- * the chunk is loaded, so the tick stalls for the duration of the load (it is
- * not non-blocking). The returned future then completes on the server thread,
- * so every read of world state (biome, heightmap, FTB Chunks claim) and the
- * teleport itself run in the future's callback on the server thread. This code
- * never calls {@code join}/{@code get} on the future itself.
+ * <p>The candidate loop runs on a single daemon worker thread this class owns.
+ * In 1.20.1 {@link ServerChunkCache#getChunkFuture} behaves differently by
+ * calling thread: on the server thread it pumps the server loop via
+ * {@code managedBlock} and stalls the tick until the chunk is FULL, but off the
+ * server thread it merely schedules the load onto the main-thread queue and
+ * returns immediately. The worker therefore calls {@code getChunkFuture} off
+ * the server thread and never blocks the tick; it only ever <em>enqueues</em>
+ * work on the server thread via {@code server.execute(...)}.
+ *
+ * <p>Every read of live world state (biome, heightmap, FTB Chunks claim) and the
+ * teleport itself run on the server thread inside {@link #onChunkReady}; the
+ * worker itself touches only the immutable geometry captured at
+ * {@link #start} time (the {@link ServerLevel} reference, the world-border
+ * half-size and the radii), so it never reads world or border state directly.
+ * This code never calls {@code join}/{@code get} on the future.
  *
  * <p>A search is single-flight per player: {@link #start} refuses while one is
  * already pending. The pending entry is removed on every exit path (success,
@@ -43,9 +52,35 @@ public final class RtpSearch {
 
     private static final Map<UUID, Search> PENDING = new ConcurrentHashMap<>();
     /** Sentinel value marking a claimed-but-not-yet-built search. */
-    private static final Search CLAIM = new Search(null, null, null);
+    private static final Search CLAIM = new Search(null, null, null, 0.0, 0, 0);
+
+    /** Single daemon worker; the candidate loop and chunk loads run here. */
+    private static final Object WORKER_LOCK = new Object();
+    private static volatile ExecutorService worker = newWorker();
 
     private RtpSearch() {
+    }
+
+    private static ExecutorService newWorker() {
+        return Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "linggango-rtp-search");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    /** Returns the worker, recreating it if a previous server stop shut it down. */
+    private static ExecutorService ensureWorker() {
+        ExecutorService executor = worker;
+        if (executor != null) {
+            return executor;
+        }
+        synchronized (WORKER_LOCK) {
+            if (worker == null) {
+                worker = newWorker();
+            }
+            return worker;
+        }
     }
 
     /** Begins a search for {@code player}, unless one is already pending. */
@@ -57,6 +92,9 @@ public final class RtpSearch {
         }
 
         ServerLevel level;
+        int minRadius;
+        int maxRadius;
+        double borderHalfSize;
         try {
             level = player.serverLevel();
         } catch (Throwable t) {
@@ -69,10 +107,42 @@ public final class RtpSearch {
             finish(playerId);
             return;
         }
+        try {
+            // Capture the immutable search geometry HERE, on the server thread,
+            // before the worker is scheduled: the worker must never read world
+            // or border state itself.
+            maxRadius = RtpConfig.maxRadius();
+            minRadius = RtpConfig.minRadius();
+            borderHalfSize = borderHalfSize(level, maxRadius);
+        } catch (Throwable t) {
+            finish(playerId);
+            return;
+        }
 
-        Search search = new Search(playerId, player, level);
+        Search search = new Search(playerId, player, level, borderHalfSize, minRadius, maxRadius);
         PENDING.put(playerId, search);
-        attempt(search, 1);
+        schedule(search, 1);
+    }
+
+    /**
+     * Enqueues the next attempt onto the worker thread. Never runs on the tick
+     * thread. This method itself never throws: a task that fails before reaching
+     * its own guards must still release the pending entry, or the search would
+     * leak.
+     */
+    private static void schedule(Search search, int attemptNumber) {
+        try {
+            ensureWorker().execute(() -> {
+                try {
+                    attempt(search, attemptNumber);
+                } catch (Throwable t) {
+                    finish(search.playerId);
+                }
+            });
+        } catch (Throwable t) {
+            // The executor is gone (server stopping): drop the pending entry.
+            finish(search.playerId);
+        }
     }
 
     /**
@@ -91,9 +161,17 @@ public final class RtpSearch {
         PENDING.remove(playerId);
     }
 
-    /** Drops every pending search. */
+    /** Drops every pending search and shuts the worker down (server stop). */
     public static void cancelAll() {
         PENDING.clear();
+        ExecutorService executor;
+        synchronized (WORKER_LOCK) {
+            executor = worker;
+            worker = null;
+        }
+        if (executor != null) {
+            executor.shutdownNow();
+        }
     }
 
     /** Number of in-flight searches; used by the lifecycle tests. */
@@ -117,30 +195,33 @@ public final class RtpSearch {
     }
 
     /**
-     * One attempt: pick a candidate, ask for its chunk, and validate in the
-     * callback. Runs on the server thread.
+     * One attempt: runs on the WORKER thread. It checks the captured state,
+     * picks a candidate from the captured geometry, and schedules the chunk load
+     * with {@link ServerChunkCache#getChunkFuture}. Because this is off the
+     * server thread the call returns immediately (it does not {@code managedBlock}
+     * the tick). The completion callback marshals validation back onto the
+     * server thread.
      */
     private static void attempt(Search search, int attemptNumber) {
         if (!isCurrent(search)) {
             return;
         }
-        if (playerGone(search.player, search.level)) {
-            finish(search.playerId);
-            return;
-        }
+        // No live world/player state is read here: the worker only touches the
+        // captured geometry. The player-gone guard runs on the server thread in
+        // onChunkReady, where the read is safe.
 
         int attempts = Math.max(1, RtpConfig.findAttempts());
         if (attemptNumber > attempts) {
-            message(search.player, "Could not find a valid location");
+            serverExecute(search, () -> message(search.player, "Could not find a valid location"),
+                    search.playerId);
             finish(search.playerId);
             return;
         }
 
-        int maxRadius = RtpConfig.maxRadius();
         int[] candidate = CandidatePicker.pick(search.rng,
                 RtpConfig.centerX(), RtpConfig.centerZ(),
-                RtpConfig.minRadius(), maxRadius,
-                borderHalfSize(search.level, maxRadius));
+                search.minRadius, search.maxRadius,
+                search.borderHalfSize);
         int x = candidate[0];
         int z = candidate[1];
 
@@ -153,14 +234,29 @@ public final class RtpSearch {
                 finish(search.playerId);
                 return;
             }
-            onChunkReady(search, attemptNumber, x, z, either);
+            serverExecute(search, () -> onChunkReady(search, attemptNumber, x, z, either),
+                    search.playerId);
         });
+    }
+
+    /**
+     * Runs {@code task} on the server thread, or releases the pending entry if
+     * the server is unavailable or the task cannot be enqueued. The worker never
+     * waits: this only enqueues. This method never throws.
+     */
+    private static void serverExecute(Search search, Runnable task, UUID playerId) {
+        try {
+            search.level.getServer().execute(task);
+        } catch (Throwable t) {
+            finish(playerId);
+        }
     }
 
     /**
      * Validates a loaded candidate on the server thread and either teleports or
      * retries. The {@code Either} may carry a loading failure, in which case the
-     * candidate is simply retried.
+     * candidate is simply retried. A retry is re-scheduled onto the worker, not
+     * recursed here, so the server thread only ever enqueues.
      */
     private static void onChunkReady(Search search, int attemptNumber, int x, int z,
                                      Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure> either) {
@@ -175,7 +271,9 @@ public final class RtpSearch {
         ChunkAccess chunk = either.left().orElse(null);
         if (chunk != null) {
             BlockPos column = new BlockPos(x, 0, z);
-            if (!LandingValidator.biomeExcluded(biomeIdAt(search.level, column))) {
+            ResourceLocation biomeId = biomeIdAt(search.level, column);
+            if (!LandingValidator.biomeExcluded(biomeId)
+                    && !LandingValidator.biomeTagIgnored(search.level, column)) {
                 OptionalInt safeY = LandingValidator.findSafeY(search.level, column);
                 if (safeY.isPresent()) {
                     BlockPos landing = new BlockPos(x, safeY.getAsInt(), z);
@@ -190,7 +288,7 @@ public final class RtpSearch {
             }
         }
 
-        attempt(search, attemptNumber + 1);
+        schedule(search, attemptNumber + 1);
     }
 
     private static boolean claimsBlock(Search search, BlockPos landing) {
@@ -257,12 +355,20 @@ public final class RtpSearch {
         final ServerPlayer player;
         final ServerLevel level;
         final Random rng;
+        /** Search geometry captured on the server thread; never re-read off-thread. */
+        final double borderHalfSize;
+        final int minRadius;
+        final int maxRadius;
 
-        Search(UUID playerId, ServerPlayer player, ServerLevel level) {
+        Search(UUID playerId, ServerPlayer player, ServerLevel level,
+               double borderHalfSize, int minRadius, int maxRadius) {
             this.playerId = playerId;
             this.player = player;
             this.level = level;
             this.rng = new Random();
+            this.borderHalfSize = borderHalfSize;
+            this.minRadius = minRadius;
+            this.maxRadius = maxRadius;
         }
     }
 }

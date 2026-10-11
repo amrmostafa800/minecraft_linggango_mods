@@ -34,6 +34,8 @@ public final class FtbAccess {
     private static final String TELEPORT_POS_CLASS = "dev.ftb.mods.ftbessentials.util.TeleportPos";
     private static final String TELEPORT_RESULT_CLASS =
             "dev.ftb.mods.ftbessentials.util.TeleportPos$TeleportResult";
+    private static final String CONFIG_CLASS =
+            "dev.ftb.mods.ftbessentials.config.FTBEConfig";
 
     private static final AtomicBoolean WARNED = new AtomicBoolean();
 
@@ -44,6 +46,14 @@ public final class FtbAccess {
     private static Method teleport;
     private static Method isSuccess;
     private static Constructor<?> teleportPosCtor;
+
+    /**
+     * FTB's {@code FTBEConfig.RTP} holder (a public static field) and its
+     * {@code isEnabled()} method, resolved reflectively once. Null when FTB is
+     * absent or the shape changed.
+     */
+    private static Object rtpConfig;
+    private static Method rtpIsEnabled;
 
     static {
         try {
@@ -69,6 +79,18 @@ public final class FtbAccess {
             warnOnce("FTB Essentials not usable; the mod stays inert", t);
             available = false;
         }
+        resolveRtpEnabled();
+    }
+
+    private static void resolveRtpEnabled() {
+        try {
+            Class<?> config = Class.forName(CONFIG_CLASS);
+            rtpConfig = config.getField("RTP").get(null);
+            rtpIsEnabled = rtpConfig.getClass().getMethod("isEnabled");
+        } catch (Throwable t) {
+            rtpConfig = null;
+            rtpIsEnabled = null;
+        }
     }
 
     private FtbAccess() {
@@ -77,6 +99,27 @@ public final class FtbAccess {
     /** True when every FTB Essentials class this class needs resolved. */
     public static boolean available() {
         return available;
+    }
+
+    /**
+     * Whether FTB's own {@code FTB Essentials -> RTP -> enabled} config gate is
+     * on. FTB only registers {@code /rtp} when it is, so this mod must intercept
+     * only when it is true. Fail-safe: on any {@link Throwable}, or when FTB is
+     * absent or the config shape could not be resolved, returns {@code false} so
+     * the command falls through to FTB's native path (which is exactly stock
+     * behaviour) rather than being swallowed by a broken gate.
+     */
+    public static boolean rtpEnabled() {
+        Object config = rtpConfig;
+        Method isEnabled = rtpIsEnabled;
+        if (config == null || isEnabled == null) {
+            return false;
+        }
+        try {
+            return Boolean.TRUE.equals(isEnabled.invoke(config));
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /**
@@ -101,7 +144,13 @@ public final class FtbAccess {
 
     /**
      * Whether a FTB cooldown currently blocks {@code /rtp} for the player.
-     * Returns false when there is no cooldown or FTB is absent.
+     *
+     * <p>Fails <strong>closed</strong>: on any reflective failure, or when FTB
+     * is absent, it returns {@code true} ("treat as on cooldown"). The command
+     * hook reads {@code true} as "do not intercept", so a broken cooldown call
+     * falls through to FTB's native {@code /rtp}, which runs its own cooldown
+     * check — a disabled cooldown gate can never let the mod bypass FTB's rate
+     * limiting.
      *
      * <p>FTB only exposes the cooldown as success/failure (see
      * {@code TeleportPos.TeleportResult}); it does not expose the remaining
@@ -109,19 +158,19 @@ public final class FtbAccess {
      */
     public static boolean checkCooldown(ServerPlayer player) {
         if (!available) {
-            return false;
+            return true;
         }
         try {
             Object data = playerData(player);
             if (data == null) {
-                return false;
+                return true;
             }
             Object teleporter = rtpTeleporter.get(data);
             Object result = checkCooldown.invoke(teleporter);
             return !Boolean.TRUE.equals(isSuccess.invoke(result));
         } catch (Throwable t) {
-            warnOnce("checkCooldown failed", t);
-            return false;
+            warnOnce("checkCooldown failed; treating as on-cooldown", t);
+            return true;
         }
     }
 

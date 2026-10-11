@@ -139,16 +139,25 @@ never on the server tick thread.
   the FTB distance keys (or leaving them) has no effect; the doc says so
   explicitly so the two configs cannot disagree.
 - **Threading resolved.** In 1.20.1 Forge, `ServerChunkCache.getChunkFuture`
-  completes on the server thread during chunk ticking. So the chunk-load is the
-  only off-thread work; all validation (`getBlockState`, biome, heightmap, FTB
-  Chunks claim lookup) and the teleport run in the future's callback on the
-  server thread. This removes the doc's earlier contradiction: nothing reads
-  world state off-thread and the teleport is correctly marshalled.
+  behaves differently by calling thread: on the server thread it `managedBlock`s
+  (stalls the tick) until the chunk is FULL, but off the server thread it merely
+  schedules the load onto the main-thread queue and returns immediately. The
+  candidate loop therefore runs on a dedicated daemon worker thread the mod owns,
+  and `getChunkFuture` is called there; all validation (`getBlockState`, biome,
+  heightmap, FTB Chunks claim lookup) and the teleport are marshalled back to the
+  server thread (via `server.execute`) inside the future's callback. The server
+  thread only ever enqueues work and never waits. This satisfies the earlier
+  requirement to "run the whole search on a background thread or the chunk
+  future's callback": nothing reads world state off-thread, and the teleport is
+  correctly marshalled.
 - **FTB pre-checks are replicated.** Because cancelling at `CommandEvent` skips
   FTB's own gates, the mod re-applies: the dimension blacklist/whitelist,
-  the `ftbessentials:ignore_rtp` biome and block datapack tags, and the op
-  permission-2 bypass. Our `excludedBiomes` list is merged with — not a
-  replacement for — the tag-driven exclusions.
+  the `ftbessentials:ignore_rtp` biome and block datapack tags, FTB's own
+  `FTBEConfig.RTP.isEnabled()` gate (interception is suppressed when it is off),
+  and the op permission-2 bypass. Our `excludedBiomes` list is merged with — not a
+  replacement for — the tag-driven exclusions. These reflective gates fail safe:
+  unresolved tags are treated as absent, and the `RTP.enabled` lookup resolves to
+  `false` on any failure.
 - **Lifecycle: single-flight per player.** A second `/rtp` while one search is
   pending is refused ("already searching"). Pending searches are cancelled when
   the player logs out, dies, changes dimension, or the server stops. The

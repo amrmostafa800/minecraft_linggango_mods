@@ -14,13 +14,13 @@ sh gradlew clean build --no-daemon --console=plain
 
 `gradlew` is committed non-executable (matching `linggango-memfix`); invoke it as `sh gradlew` or
 `chmod +x gradlew` first. The first build downloads and decompiles Minecraft through ForgeGradle
-and takes a few minutes. Later builds are seconds. The unit suite (18 tests) runs as part of
+and takes a few minutes. Later builds are seconds. The unit suite (21 tests) runs as part of
 `build`.
 
 ## Status
 
 **Not yet executed against a live client; deploy pending go/no-go.** The mod is fully implemented,
-`sh gradlew clean build` is `BUILD SUCCESSFUL` with 18 tests passing (0 failed, 0 skipped), and the
+`sh gradlew clean build` is `BUILD SUCCESSFUL` with 21 tests passing (0 failed, 0 skipped), and the
 built jar was statically inspected — but this environment has no Minecraft client, so the `/rtp`
 path has never run against the game. Installing it on the live server (and turning off the memfix
 `/rtp` guard) is a production side-effect that needs a human go/no-go. See
@@ -32,17 +32,41 @@ path has never run against the game. Installing it on the live server (and turni
   implementation, running its own search instead.
 - **Overworld only.** In the Nether or End the event is not cancelled; FTB's path (including its
   End blacklist) runs untouched.
-- Only intercepts while FTB reports **no cooldown**, FTB Essentials is **present**, and the mod is
-  **`enabled`**. Otherwise the command falls through to FTB unchanged.
+- Only intercepts while FTB reports **no cooldown**, FTB Essentials is **present**, FTB's own
+  **`RTP.enabled`** config gate is on, and the mod is **`enabled`**. Otherwise the command falls
+  through to FTB unchanged.
 - Picks a uniformly-by-area candidate in `[minRadius, maxRadius]` around `(centerX, centerZ)`,
   clamped to the world border when the border is smaller than `maxRadius`.
-- Loads the candidate chunk via `ServerChunkCache.getChunkFuture`; validates the landing (biome not
-  excluded, safe Y, not a foreign FTB Chunks claim) in the future's callback on the server thread;
-  retries up to `findAttempts`.
+- Runs the candidate loop on a dedicated daemon worker thread, so `ServerChunkCache.getChunkFuture`
+  is called **off the server tick thread** (in 1.20.1 that schedules the load and returns
+  immediately; on the server thread it would `managedBlock`/stall). The immutable geometry
+  (`ServerLevel`, border half-size, radii) is captured on the server thread at `start`; the worker
+  reads no world state.
+- Validates the landing on the **server thread** (biome not excluded by config or FTB's
+  `ftbessentials:ignore_rtp` biome tag, safe Y, surface not in FTB's `ftbessentials:ignore_rtp`
+  block tag, not a foreign FTB Chunks claim); retries up to `findAttempts`, re-scheduling retries
+  onto the worker rather than recursing on the server thread.
 - Delegates the final teleport to FTB's `rtpTeleporter.teleport(...)`, so FTB's cooldown message,
   warm-up, dimension blacklist and teleport history (and therefore `/back`) still apply.
 - Single-flight per player; a search is cancelled on logout, dimension change, death and server
-  stop. On exhaustion it tells the player `Could not find a valid location`.
+  stop (the worker is shut down on server stop). On exhaustion it tells the player
+  `Could not find a valid location`.
+
+### FTB gate parity and fail-safe direction
+
+FTB's decompiled `TeleportCommands` rejects the `ftbessentials:ignore_rtp` **biome** and **block**
+tags and registers `/rtp` only when `FTBEConfig.RTP.isEnabled()`. All three are replicated
+reflectively. `excludedBiomes` is merged with the biome tag (not a replacement). Fail-safe
+directions: unresolved tags → treated as absent (no rejection); `RTP.enabled` → `false` on any
+failure (no interception); the FTB cooldown check → **fails closed** (`true` = "on cooldown" = do
+not intercept); a `Throwable` in the command hook is logged once and the command still falls through
+to FTB.
+
+### memfix relationship
+
+When this mod intercepts, FTB's RNG path — and the `linggango-memfix` `RtpGuard` — does not run.
+Keep the memfix guard on as a fallback until this mod is proven on the live server.
+
 
 ## Configuration
 

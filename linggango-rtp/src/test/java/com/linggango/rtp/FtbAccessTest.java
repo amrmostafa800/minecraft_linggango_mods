@@ -31,6 +31,22 @@ class FtbAccessTest {
     }
 
     @Test
+    void rtpDisabledWhenFtbAbsent() {
+        assertFalse(FtbAccess.rtpEnabled(),
+                "with FTB absent the RTP gate must resolve false so interception never fires");
+    }
+
+    @Test
+    void cooldownFailsClosedWhenFtbAbsent() {
+        // FTB is absent, so checkCooldown short-circuits before touching the
+        // player. It must report "on cooldown" (true) so the command falls
+        // through to FTB's native path: a broken cooldown call can never
+        // disable the gate. The player argument is therefore never dereferenced.
+        assertTrue(FtbAccess.checkCooldown(null),
+                "an unresolvable cooldown check must fail closed (treat as on cooldown)");
+    }
+
+    @Test
     void supplierIgnoresArgument() throws Exception {
         ResourceKey<Level> dim = overworldKey();
         BlockPos pos = new BlockPos(1234, 64, -5678);

@@ -6,7 +6,7 @@ asynchronous one, so a random teleport can reach terrain that has never been gen
 stalling the server thread.
 
 > **Status:** not yet executed against a live client; deploy pending go/no-go. The mod is fully
-> implemented, builds cleanly and passes its unit suite (18 tests), but no Minecraft client
+> implemented, builds cleanly and passes its unit suite (21 tests), but no Minecraft client
 > exists in the build environment, so the `/rtp` path has never run against the game. See
 > [`docs/DEPLOY.md`](docs/DEPLOY.md) before installing it anywhere.
 
@@ -18,9 +18,10 @@ players can only ever be placed in terrain that is already generated, and each a
 terrain freezes every other player for the duration of the generation.
 
 This mod owns `/rtp` and nothing else. It picks candidates across a bounded spread, loads each
-chunk **off the main thread**, validates the landing on the server thread when the chunk is ready,
-retries a bounded number of times, and then delegates the actual teleport back to FTB so cooldowns,
-warmups, teleport history and dimension rules are unchanged.
+chunk **off the server tick thread** (on a dedicated daemon worker), validates the landing on the
+server thread when the chunk is ready, retries a bounded number of times, and then delegates the
+actual teleport back to FTB so cooldowns, warmups, teleport history and dimension rules are
+unchanged.
 
 ## Non-goals
 
@@ -34,27 +35,53 @@ warmups, teleport history and dimension rules are unchanged.
 
 - Intercepts `/rtp` at Forge's `CommandEvent`, cancels FTB's synchronous implementation, and runs
   its own search. Interception happens **only in the overworld**, only while FTB reports no active
-  cooldown, only while FTB Essentials is present and only while the mod is `enabled`. In every
-  other case the event is left alone and FTB's own path (including its cooldown message, warm-up,
-  End blacklist and history) runs untouched.
+  cooldown, only while FTB Essentials is present, only while FTB's own `RTP.enabled` config gate is
+  on, and only while the mod is `enabled`. In every other case the event is left alone and FTB's
+  own path (including its cooldown message, warm-up, End blacklist and history) runs untouched.
 - Picks a uniformly-by-area random point within a configured radius (default 32,000 blocks) of a
   configurable center (default world origin), clamped to the world border.
-- Loads the candidate chunk through `ServerChunkCache.getChunkFuture` — never blocking the server
-  tick on generation.
-- Validates the landing on the server thread (solid, safe, open ground; not an excluded biome such
-  as ocean or river), retrying up to N times.
+- Runs the whole candidate loop on a dedicated daemon worker thread this mod owns, so
+  `ServerChunkCache.getChunkFuture` is called **off the server tick thread**. In 1.20.1 that call
+  schedules the chunk load on the main-thread queue and returns immediately; called on the server
+  thread it would instead `managedBlock` (stall) the tick until the chunk is FULL. The server
+  thread only ever enqueues work, never waits.
+- Validates the landing **on the server thread** (solid, safe, open ground; not an excluded biome
+  such as ocean or river; not in FTB's `ftbessentials:ignore_rtp` biome or block tag; not a foreign
+  FTB Chunks claim), retrying up to N times. A retry is re-scheduled onto the worker, not recursed
+  on the server thread.
 - Hands the found position to FTB's own `rtpTeleporter.teleport(...)` so FTB still applies the
   cooldown, dimension blacklist, warm-up and teleport history. A rapid second `/rtp` therefore
   still gets FTB's cooldown message, and `/back` still works because FTB recorded the teleport.
 - Runs at most one search per player at a time (single-flight); a second `/rtp` while one is
   pending is refused with `already searching`.
 - Cancels any in-flight search when the player logs out, changes dimension, dies, or the server
-  stops, so a callback can never teleport a player who is gone.
+  stops (the worker is shut down on server stop), so a callback can never teleport a player who is
+  gone.
 - Fails gracefully: if no valid spot is found after `findAttempts`, tells the player
   `Could not find a valid location` and does not teleport.
 
 All FTB access is reflective, so the mod compiles against Forge alone (no mod dependencies in
 `build.gradle`) and does nothing if FTB Essentials is absent.
+
+### FTB's own `/rtp` gates are honored
+
+FTB Essentials' decompiled `TeleportCommands` rejects biomes in the `ftbessentials:ignore_rtp`
+biome tag, rejects surface blocks in the `ftbessentials:ignore_rtp` block tag (e.g.
+`#minecraft:leaves`, `minecraft:bedrock`), and only registers `/rtp` at all when
+`FTBEConfig.RTP.isEnabled()` is true. All three are replicated here, reflectively (no compile-time
+FTB dependency): the mod's config `excludedBiomes` list is **merged with** — not a replacement for
+— the biome tag, and interception is suppressed entirely when FTB's own gate is off so the command
+behaves exactly as stock FTB. These lookups fail safe: a tag that cannot be resolved is treated as
+absent (no tag rejection), and the `RTP.enabled` gate resolves to `false` on any failure (no
+interception). The FTB cooldown check also **fails closed** (a broken reflective call is treated as
+"on cooldown" so the command falls through to FTB's native path); a failure of the command hook
+itself is logged once, not swallowed silently.
+
+### Relationship to the memfix guard
+
+When this mod successfully intercepts, FTB's own RNG path — and therefore the `linggango-memfix`
+`RtpGuard` — does **not** run. The memfix guard is kept as a fallback and should only be turned
+off once this mod is proven on the live server. Do not disable it before then.
 
 ## Configuration
 
@@ -124,13 +151,13 @@ sh gradlew clean build --no-daemon --console=plain
 
 `gradlew` is committed non-executable (matching the sibling mods), so invoke it as `sh gradlew`
 or `chmod +x gradlew` first. The first build downloads and decompiles Minecraft through
-ForgeGradle and takes a few minutes; the unit suite (18 tests) runs as part of `build`.
+ForgeGradle and takes a few minutes; the unit suite (21 tests) runs as part of `build`.
 
 ## Release verification
 
-- Build: `BUILD SUCCESSFUL`, **18 tests passed, 0 failed, 0 skipped**.
-- Artifact: `build/libs/linggango_rtp-1.0.0.jar`, 21,475 bytes, SHA-256
-  `9f243ce1ae1298f2633233eedd21fd5a6914d1f0bacc4fe79c94401bd566e317`.
+- Build: `BUILD SUCCESSFUL`, **21 tests passed, 0 failed, 0 skipped**.
+- Artifact: `build/libs/linggango_rtp-1.0.0.jar`, 24,288 bytes, SHA-256
+  `819cfe4c6ad1da99959809394b549425aca8ffd3e73c9e493158229c628e1aa6`.
 - The jar contains `META-INF/mods.toml`, `pack.mcmeta` and the seven mod classes; it bundles no
   FTB classes (FTB access is reflection-only).
 - `mods.toml` declares modid `linggango_rtp` and a soft (`mandatory=false`) `ftbessentials`
