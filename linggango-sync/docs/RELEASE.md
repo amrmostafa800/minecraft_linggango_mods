@@ -9,8 +9,11 @@ tree means history stays diffable and there is never a stale copy in `src`.
 | | |
 | --- | --- |
 | File | `linggangosync-1.0.0+mc1.20.1.jar` |
-| Size | 106,059 bytes |
-| SHA-256 | `591e00eadfe4b6ee565d2620a49613d8c55893feb4f76a933f460002c1b572ef` |
+| Size | 113,836 bytes |
+| SHA-256 | `cdd1ef24e97198d11dcc77741f2267754b6b6e958dc693023a43df22d80c4f1a` |
+
+> The artifact filename keeps the mod version (`1.0.0`) while the release tag advances
+> (`v1.0.1`). The tag identifies the release; the filename identifies the mod build.
 
 ## Cutting a release
 
@@ -88,7 +91,7 @@ On Windows PowerShell:
 ## Checklist before publishing
 
 - [ ] `gradle clean build` succeeds
-- [ ] All 78 tests pass
+- [ ] All 88 tests pass
 - [ ] `sha256sum` recorded in the release notes
 - [ ] Jar contains `mods.toml`, `mixins.json`, `refmap.json`, `pack.mcmeta`
 - [ ] `refmap.json` resolves to SRG names (`f_` / `m_`), not official names
