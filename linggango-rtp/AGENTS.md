@@ -19,12 +19,12 @@ and takes a few minutes. Later builds are seconds. The unit suite (21 tests) run
 
 ## Status
 
-**Not yet executed against a live client; deploy pending go/no-go.** The mod is fully implemented,
+**Deployed to the live server 2026-10-11; not yet verified in-game.** The mod is fully implemented,
 `sh gradlew clean build` is `BUILD SUCCESSFUL` with 21 tests passing (0 failed, 0 skipped), and the
 built jar was statically inspected — but this environment has no Minecraft client, so the `/rtp`
-path has never run against the game. Installing it on the live server (and turning off the memfix
-`/rtp` guard) is a production side-effect that needs a human go/no-go. See
-[`docs/DEPLOY.md`](docs/DEPLOY.md).
+path has never run against the game. The memfix `/rtp` guard was removed in the same change (memfix
+1.1.0), so there is no fallback. Run the acceptance test in [`docs/DEPLOY.md`](docs/DEPLOY.md) after
+the next server start and roll back if it fails.
 
 ## Behaviour
 
@@ -62,10 +62,12 @@ failure (no interception); the FTB cooldown check → **fails closed** (`true` =
 not intercept); a `Throwable` in the command hook is logged once and the command still falls through
 to FTB.
 
-### memfix relationship
+### memfix relationship (removed)
 
-When this mod intercepts, FTB's RNG path — and the `linggango-memfix` `RtpGuard` — does not run.
-Keep the memfix guard on as a fallback until this mod is proven on the live server.
+`linggango-memfix` 1.0.0 shipped an `RtpGuard` that declined `/rtp` candidates whose chunk was not
+already generated. It made `/rtp` useless (its 512-block pregenerated area is far smaller than the
+pack's `rtp.max_distance: 2048`), so memfix 1.1.0 **removed the guard and pregenerator entirely**.
+When this mod intercepts, FTB's RNG path and any guard do not run; there is now no fallback.
 
 
 ## Configuration
@@ -89,10 +91,10 @@ Default `excludedBiomes`: the eight ocean variants, `river`, `frozen_river`, `de
 
 ## Deploying
 
-The deploy runbook is [`docs/DEPLOY.md`](docs/DEPLOY.md): exact SFTP target
-(`fr-zero.acorehosting.com:2022`, chrooted), backup of `config/memfix-common.toml`, jar upload,
-guard/pregenerate edit, restart, smoke test, and rollback. The password is an environment-provided
-secret and is never written to the repo.
+The deploy record is [`docs/DEPLOY.md`](docs/DEPLOY.md): the SFTP target
+(`fr-zero.acorehosting.com:2022`), what was backed up and deployed on 2026-10-11, the post-start
+acceptance test, tuning, and rollback. The password is an operator-provided secret and is never
+written to the repo.
 
 ## Invariants to preserve (from the plan)
 

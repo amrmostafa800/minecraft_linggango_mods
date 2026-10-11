@@ -5,10 +5,11 @@ Java 17). It replaces FTB Essentials' synchronous `/rtp` location search with an
 asynchronous one, so a random teleport can reach terrain that has never been generated without
 stalling the server thread.
 
-> **Status:** not yet executed against a live client; deploy pending go/no-go. The mod is fully
-> implemented, builds cleanly and passes its unit suite (21 tests), but no Minecraft client
-> exists in the build environment, so the `/rtp` path has never run against the game. See
-> [`docs/DEPLOY.md`](docs/DEPLOY.md) before installing it anywhere.
+> **Status:** deployed to the live server on 2026-10-11 with the memfix `/rtp` guard removed, but
+> **not yet verified in-game** — no Minecraft client exists in the build environment, so the `/rtp`
+> path has never actually run against the game. The mod is fully implemented, builds cleanly and
+> passes its unit suite (21 tests). The acceptance test to run after the next server start is in
+> [`docs/DEPLOY.md`](docs/DEPLOY.md); roll back if it fails.
 
 ## Intent
 
@@ -77,11 +78,15 @@ interception). The FTB cooldown check also **fails closed** (a broken reflective
 "on cooldown" so the command falls through to FTB's native path); a failure of the command hook
 itself is logged once, not swallowed silently.
 
-### Relationship to the memfix guard
+### Relationship to the memfix guard (removed)
 
-When this mod successfully intercepts, FTB's own RNG path — and therefore the `linggango-memfix`
-`RtpGuard` — does **not** run. The memfix guard is kept as a fallback and should only be turned
-off once this mod is proven on the live server. Do not disable it before then.
+`linggango-memfix` 1.0.0 shipped an `RtpGuard` that declined any `/rtp` candidate
+whose chunk was not already generated, plus a small startup pregenerator, as a
+fallback against FTB's blocking search. In practice the guard made `/rtp` useless
+(it declined nearly every candidate, since the 512-block pregenerated area is far
+smaller than the pack's `rtp.max_distance: 2048`), so **memfix 1.1.0 removed the
+guard and pregenerator entirely**. Random teleport is now this mod's job alone;
+there is no fallback if this mod fails to intercept.
 
 ## Configuration
 
@@ -136,9 +141,9 @@ Biome matching is case-insensitive.
 FTB Essentials is a soft dependency: it is not required to load the mod, but the mod's behaviour
 only applies where FTB Essentials is present.
 
-**Deploying to the live server** (and retiring the `linggango-memfix` `/rtp` guard) is a
-production side-effect and needs a human go/no-go: see [`docs/DEPLOY.md`](docs/DEPLOY.md) for the
-exact SFTP, backup, edit, restart, smoke-test and rollback steps.
+**Deploying to the live server** was done on 2026-10-11; the memfix `/rtp` guard was removed in the
+same change. See [`docs/DEPLOY.md`](docs/DEPLOY.md) for what was deployed, the post-start acceptance
+test, tuning, and rollback.
 
 ## Building from source
 
@@ -157,7 +162,8 @@ ForgeGradle and takes a few minutes; the unit suite (21 tests) runs as part of `
 
 - Build: `BUILD SUCCESSFUL`, **21 tests passed, 0 failed, 0 skipped**.
 - Artifact: `build/libs/linggango_rtp-1.0.0.jar`, 24,288 bytes, SHA-256
-  `819cfe4c6ad1da99959809394b549425aca8ffd3e73c9e493158229c628e1aa6`.
+  `db2fcdcce22ac703113e8d2419c049f2ff93196999809112a03333055fe01197` (the deployed build; jars are
+  not bit-reproducible, so a rebuild yields a different hash).
 - The jar contains `META-INF/mods.toml`, `pack.mcmeta` and the seven mod classes; it bundles no
   FTB classes (FTB access is reflection-only).
 - `mods.toml` declares modid `linggango_rtp` and a soft (`mandatory=false`) `ftbessentials`
