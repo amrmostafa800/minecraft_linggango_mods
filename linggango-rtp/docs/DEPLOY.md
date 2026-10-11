@@ -18,8 +18,8 @@ retiring the `linggango-memfix` `/rtp` guard + pregenerator.
 | | |
 | --- | --- |
 | File | `build/libs/linggango_rtp-1.0.0.jar` |
-| Size | 21,475 bytes |
-| SHA-256 | `9f243ce1ae1298f2633233eedd21fd5a6914d1f0bacc4fe79c94401bd566e317` |
+| Size | 24,288 bytes |
+| SHA-256 | `9b2046a08a653029242f8732d3038daea80e588f40c59d3360f290f3e44d6393` |
 
 The jar is **not committed to git** (`build/` is gitignored). Build it with:
 
