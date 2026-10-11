@@ -53,7 +53,7 @@ public final class RtpSearch {
 
     private static final Map<UUID, Search> PENDING = new ConcurrentHashMap<>();
     /** Sentinel value marking a claimed-but-not-yet-built search. */
-    private static final Search CLAIM = new Search(null, null, null, 0.0, 0, 0, null, 0);
+    private static final Search CLAIM = new Search(null, null, null, 0.0, 0, 0, null, 0, false);
 
     /** Single daemon worker; the candidate loop and chunk loads run here. */
     private static final Object WORKER_LOCK = new Object();
@@ -98,6 +98,7 @@ public final class RtpSearch {
         double borderHalfSize;
         Path regionDir;
         boolean existingChunksOnly;
+        boolean unloadedChunksOnly;
         int chunkMargin;
         try {
             level = player.serverLevel();
@@ -118,6 +119,7 @@ public final class RtpSearch {
             maxRadius = RtpConfig.maxRadius();
             minRadius = RtpConfig.minRadius();
             borderHalfSize = borderHalfSize(level, maxRadius);
+            unloadedChunksOnly = RtpConfig.unloadedChunksOnly();
             existingChunksOnly = RtpConfig.existingChunksOnly();
             chunkMargin = RtpConfig.chunkMargin();
             regionDir = existingChunksOnly ? ChunkIndex.regionDir(level) : null;
@@ -127,12 +129,28 @@ public final class RtpSearch {
         }
 
         Search search = new Search(playerId, player, level, borderHalfSize, minRadius, maxRadius,
-                regionDir, chunkMargin);
+                regionDir, chunkMargin, unloadedChunksOnly);
+        if (unloadedChunksOnly) {
+            // Snapshot the loaded set once, on the server thread; the worker uses
+            // it to reject candidates that are already loaded. A chunk that loads
+            // later is caught by the per-candidate getChunkNow re-check.
+            search.loadedPacked = loadedChunkPositions(level);
+        }
         PENDING.put(playerId, search);
-        debug("start player=%s center=(%d,%d) radius=%d..%d attempts=%d diskGate=%s margin=%d",
+        debug("start player=%s center=(%d,%d) radius=%d..%d attempts=%d unloadedOnly=%s diskGate=%s margin=%d loaded=%d",
                 playerId, RtpConfig.centerX(), RtpConfig.centerZ(), minRadius, maxRadius,
-                RtpConfig.findAttempts(), existingChunksOnly, chunkMargin);
+                RtpConfig.findAttempts(), unloadedChunksOnly, existingChunksOnly, chunkMargin,
+                search.loadedPacked.size());
         schedule(search, 1);
+    }
+
+    /** Packs the position of every chunk currently loaded at FULL status. */
+    private static java.util.List<Long> loadedChunkPositions(ServerLevel level) {
+        try {
+            return LoadedChunks.positions(level.getChunkSource());
+        } catch (Throwable t) {
+            return java.util.List.of();
+        }
     }
 
     /**
@@ -237,6 +255,17 @@ public final class RtpSearch {
         int x = candidate[0];
         int z = candidate[1];
 
+        // RTP must land the player in fresh terrain, so reject candidates whose
+        // chunk is already loaded. The snapshot was taken on the server thread at
+        // start; requestChunk re-checks on the server thread in case one loaded
+        // since.
+        if (search.unloadedChunksOnly
+                && search.loadedPacked.contains(UnloadedCandidatePicker.packChunk(x >> 4, z >> 4))) {
+            debug("attempt %d: (%d,%d) rejected, chunk already loaded", attemptNumber, x, z);
+            schedule(search, attemptNumber + 1);
+            return;
+        }
+
         // Reject terrain that is not already on disk before asking the chunk
         // system for it. Requesting a chunk at FULL status loads it if it
         // exists, but GENERATES it if it does not - the exact work that stalls
@@ -279,6 +308,14 @@ public final class RtpSearch {
         }
         if (playerGone(search.player, search.level)) {
             finish(search.playerId);
+            return;
+        }
+        // Re-check on the server thread: a chunk that was unloaded at start may
+        // have loaded since (a player walked near it), which would make it a
+        // non-fresh landing target.
+        if (search.unloadedChunksOnly && search.level.getChunkSource().getChunkNow(x >> 4, z >> 4) != null) {
+            debug("attempt %d: (%d,%d) rejected, chunk loaded since start", attemptNumber, x, z);
+            schedule(search, attemptNumber + 1);
             return;
         }
 
@@ -452,10 +489,14 @@ public final class RtpSearch {
         /** Region directory to gate candidates on, or null when the gate is off. */
         final Path regionDir;
         final int chunkMargin;
+        /** True when candidates must NOT be currently loaded in memory. */
+        final boolean unloadedChunksOnly;
+        /** Packed chunk positions that were loaded at start; empty unless unloaded-only. */
+        java.util.List<Long> loadedPacked = java.util.List.of();
 
         Search(UUID playerId, ServerPlayer player, ServerLevel level,
                double borderHalfSize, int minRadius, int maxRadius,
-               Path regionDir, int chunkMargin) {
+               Path regionDir, int chunkMargin, boolean unloadedChunksOnly) {
             this.playerId = playerId;
             this.player = player;
             this.level = level;
@@ -465,6 +506,7 @@ public final class RtpSearch {
             this.maxRadius = maxRadius;
             this.regionDir = regionDir;
             this.chunkMargin = chunkMargin;
+            this.unloadedChunksOnly = unloadedChunksOnly;
         }
     }
 }

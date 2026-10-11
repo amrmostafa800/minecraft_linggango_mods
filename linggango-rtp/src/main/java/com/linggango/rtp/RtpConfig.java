@@ -56,6 +56,7 @@ public final class RtpConfig {
     private static final ForgeConfigSpec.IntValue MAX_RADIUS;
     private static final ForgeConfigSpec.IntValue FIND_ATTEMPTS;
     private static final ForgeConfigSpec.BooleanValue EXISTING_CHUNKS_ONLY;
+    private static final ForgeConfigSpec.BooleanValue UNLOADED_CHUNKS_ONLY;
     private static final ForgeConfigSpec.IntValue CHUNK_MARGIN;
     private static final ForgeConfigSpec.BooleanValue RESPECT_CLAIMS;
     private static final ForgeConfigSpec.BooleanValue DEBUG;
@@ -81,10 +82,18 @@ public final class RtpConfig {
                         "when existingChunksOnly rejects ungenerated terrain, so this can be high.")
                 .defineInRange("findAttempts", 40, 1, 1000);
         EXISTING_CHUNKS_ONLY = b.comment("Only consider candidates whose chunk (and its",
-                        "neighbours, see chunkMargin) are already written to disk. This is what",
-                        "keeps a search from generating terrain and stalling the server. Turn it",
-                        "off only to reach never-generated terrain, accepting the tick stalls.")
-                .define("existingChunksOnly", true);
+                        "neighbours, see chunkMargin) are already written to disk. Off by default:",
+                        "RTP should land in NEW terrain, so the chunk is generated on arrival.",
+                        "Generation happens when the player's ticket brings the chunk to FULL;",
+                        "keep maxRadius modest so one landing does not generate too much at once.",
+                        "Turn this on to restrict the search to already-generated terrain.")
+                .define("existingChunksOnly", false);
+        UNLOADED_CHUNKS_ONLY = b.comment("Only teleport into chunks that are NOT currently loaded in memory.",
+                        "RTP should move a player somewhere new, so the destination chunk is not",
+                        "already loaded and is generated when the player arrives. Set false to",
+                        "allow landing inside the currently loaded area (which teleports the",
+                        "player only within terrain they can already see).")
+                .define("unloadedChunksOnly", true);
         CHUNK_MARGIN = b.comment("Neighbour margin required on disk around a candidate, in chunks.",
                         "1 means the full 3x3 neighbourhood must exist, which is what stops",
                         "loading a candidate from generating its neighbours.")
@@ -153,10 +162,22 @@ public final class RtpConfig {
         }
     }
 
-    /** True when candidates must already be written to disk. Default true. */
+    /** True when candidates must already be written to disk. Default false. */
     public static boolean existingChunksOnly() {
         try {
             return EXISTING_CHUNKS_ONLY.get();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * True when candidates must NOT be currently loaded in memory, so RTP lands
+     * the player in fresh terrain (generated on arrival). Default true.
+     */
+    public static boolean unloadedChunksOnly() {
+        try {
+            return UNLOADED_CHUNKS_ONLY.get();
         } catch (Throwable t) {
             return true;
         }

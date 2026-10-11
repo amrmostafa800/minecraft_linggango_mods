@@ -16,6 +16,37 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 minecraft {
     mappings channel: mapping_channel, version: mapping_version
     copyIdeResources = true
+
+    // Widens ChunkMap.getChunks() (SRG m_140416_) so /rtp can avoid loaded chunks.
+    accessTransformer = file('src/main/resources/META-INF/accesstransformer.cfg')
+
+    // Dev launchers for in-game testing. `run/mods` holds the FTB mods the
+    // server under test provides; the mod itself loads from source.
+    runs {
+        client {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'debug'
+            // Let third-party mods' mixin refmaps resolve SRG names in dev.
+            jvmArgs '-Xmx2G',
+                    '-Dmixin.env.remapRefMap=true',
+                    "-Dmixin.env.refMapRemappingFile=${projectDir}/build/createSrgToMcp/output.srg"
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+        server {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'debug'
+            jvmArgs '-Xmx2G'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+    }
 }
 
 repositories {
