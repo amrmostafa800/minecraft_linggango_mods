@@ -9,7 +9,17 @@ Every key is optional. Anything missing, unparsable, or misspelled falls back to
 default, never to an optimisation. Reload without restarting using
 `/linggango-net reload` (permission level 2).
 
+> **Current status: measurement only.** This build observes traffic; it does **not** yet
+> apply the `sync` / `mods` policies. The mod is designed to reduce what the server sends â€”
+> keep reproducible data on the client and push only what a player actually needs, in the
+> spirit of Terraria â€” but that engine is not wired in yet. Changing a policy below does
+> not change any packet today; it only records the intent for the optimisation phase. Use
+> this build to collect the reports that will drive which optimisations are worth building.
+
 ## Policies
+
+> The policy values below are **declared, not yet enforced**. They are shown so the
+> intended direction is auditable, but nothing reads them at runtime yet.
 
 | Policy | Meaning |
 | --- | --- |
@@ -156,6 +166,10 @@ Note that a namespace-wide `*` beats the generic category default. That is what 
 sets `sync.gui_data` to something more permissive.
 
 ## Suggested workflow
+
+> In this build, steps 3–5 are preparation only: a policy change is recorded and shown by
+> `/linggango-net policy`, but it is not applied to any packet yet. Stop after step 2 and
+> keep the reports — they are what the optimisation phase will be built from.
 
 1. Run one normal session with `debug.enabled: true` and nothing else changed.
 2. Read `/linggango-net stats` and `/linggango-net types`.

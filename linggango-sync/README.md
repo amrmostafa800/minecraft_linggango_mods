@@ -12,14 +12,23 @@ presentation, caches, and reproducible client-side data stay on the client.
 
 Built and verified against the real serverpack. Version **1.0.0+mc1.20.1**.
 
+**What works today: measurement only.** The packet monitor observes every outbound packet
+and attributes it to a mod, a direction and a player. The `sync` / `mods` policy config is
+**declared but not yet enforced** — changing a policy does not change any packet in this
+build. The intended direction is to send each player only what they need and keep
+reproducible data on the client (Terraria-style), but that optimisation engine is a later
+phase. Use this build to collect the reports that will drive it.
+
 | Check | Result |
 | --- | --- |
-| Unit tests | **78 / 78 pass** |
+| Unit tests | **81 / 81 pass** |
 | Build | `gradle build` succeeds |
 | Loads in the actual 407-mod serverpack | Yes |
 | Mixin applies to `PacketEncoder` | Yes — confirmed in `logs/debug.log` |
 | Real packet captured and attributed | Yes — 127 B `Vanilla` `S->C` |
+| Periodic report logged automatically | Yes — `debug.statsIntervalSeconds` |
 | Operators' commands work live | Yes — `stats`, `adapters`, `policy` verified |
+| Optimisations applied | **No — declared only; not wired yet** |
 
 ## Important honesty note on benchmarks
 
@@ -108,7 +117,7 @@ boolean read per packet.
 This is the part to trust first: it tells you the truth about your server even if you never
 enable a single optimisation.
 
-### 2. Client cache (implemented and unit-tested)
+### 2. Client cache (implemented and unit-tested; not populated yet)
 
 An LRU cache with both an entry cap and a byte cap, TTL expiry, optional disk persistence,
 and defensive copying on both write and read (a caller cannot mutate the cache through the
@@ -119,7 +128,11 @@ Addresses the task's `get` / `put` / `invalidate` / `hasVersion` / `clear` / `cl
 requirement, plus `evictions`, `expired` and `rejected` counters surfaced via
 `/linggango-net cache`.
 
-### 3. Delta + coalescing codec (implemented and benchmarked)
+> The cache is not fed by any request path in this build, so it stays empty in a normal
+> session (it only loads from disk). It becomes useful once the on-demand engine writes to
+> it.
+
+### 3. Delta + coalescing codec (implemented and benchmarked; not yet applied)
 
 Field-level deltas with a schema hash, so a version mismatch causes a full snapshot rather
 than a misread. A coalescing window collapses rapid updates to the newest value **only**
@@ -127,7 +140,10 @@ when intermediate states are provably irrelevant; a change to a *different* fiel
 immediately instead of being swallowed. Corrupt, truncated, mis-schema'd and
 uncoercible payloads are all rejected, never guessed at.
 
-### 4. Adapter registry + policy config (implemented, wired to commands)
+> The codec is exercised by its own tests and benchmarks, but no adapter feeds it packets
+> yet, so it does not reduce live traffic in this build.
+
+### 4. Adapter registry + policy config (declared; not yet enforced)
 
 Ten adapters declaring **60 data types**, each carrying a written rationale. Every adapter
 rule is either `safe(...)` with a reason it cannot change a gameplay outcome, or
@@ -135,6 +151,10 @@ rule is either `safe(...)` with a reason it cannot change a gameplay outcome, or
 both, so the safety argument is auditable rather than implicit.
 
 The default for anything unregistered is `SERVER_AUTHORITATIVE`.
+
+> **This layer is a declaration today, not an execution path.** Nothing in the packet path
+> reads the policy yet, so no rule is applied. It exists to make the intended optimisations
+> and their safety arguments explicit before the engine that consumes them is built.
 
 ## Supported integrations
 
